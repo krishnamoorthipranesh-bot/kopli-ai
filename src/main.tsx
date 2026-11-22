@@ -869,15 +869,16 @@ function App() {
       {mobileViewport && sidebarOpen && <button className="sidebar-overlay" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`} aria-label="Main navigation">
         <div className="brand"><span className="brand-mark"><img className="hen-image hen-small" src="/logo.png" alt="" /></span><strong>KOPLI <b>AI</b></strong></div>
-        <button className="new-chat" onClick={newChat}><Plus size={18} /><span>New chat</span></button>
+        <button className="new-chat" aria-label="New chat" title="New chat" onClick={newChat}><Plus size={18} aria-hidden="true" /><span>New chat</span></button>
         <nav className="nav" aria-label="Workspace">
           {navigation.map(item => {
             const Icon = item.icon;
-            return <button key={item.label} className={section === item.label ? "active" : ""} aria-current={section === item.label ? "page" : undefined} onClick={() => chooseSection(item.label)}><Icon size={18} /><span>{({Chat:"AI Assistant",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[item.label]}</span></button>;
+            const label = ({Chat:"AI Assistant",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[item.label];
+            return <button key={item.label} className={section === item.label ? "active" : ""} aria-label={label} title={label} aria-current={section === item.label ? "page" : undefined} onClick={() => chooseSection(item.label)}><Icon size={18} aria-hidden="true" /><span>{label}</span></button>;
           })}
-          {user?.role === "owner" && <button className={section === "Admin" ? "active" : ""} onClick={() => void loadAdmin()}><Shield size={18} /><span>Admin</span></button>}
+          {user?.role === "owner" && <button className={section === "Admin" ? "active" : ""} aria-label="Admin" title="Admin" onClick={() => void loadAdmin()}><Shield size={18} aria-hidden="true" /><span>Admin</span></button>}
         </nav>
-        <button className="sidebar-about" onClick={() => { setSection("Settings"); setSettingsDetail("About KOPLI AI"); setSidebarOpen(false); }}><CircleHelp size={17} /><span>About KOPLI AI</span></button>
+        <button className="sidebar-about" aria-label="About KOPLI AI" title="About KOPLI AI" onClick={() => { setSection("Settings"); setSettingsDetail("About KOPLI AI"); setSidebarOpen(false); }}><CircleHelp size={17} aria-hidden="true" /><span>About KOPLI AI</span></button>
         <div className="history">
           <div className="history-title">Recent chats</div>
           {currentHistory.length ? currentHistory.map(conversation => (
