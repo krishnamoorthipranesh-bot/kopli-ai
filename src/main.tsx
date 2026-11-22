@@ -70,6 +70,14 @@ interface LibraryFile {
   updatedAt: string;
 }
 
+interface ExploreResult {
+  fileName: string;
+  mimeType?: string;
+  previewUrl?: string;
+  content?: string;
+  title?: string;
+}
+
 interface UploadedFile {
   id: string;
   fileName: string;
@@ -254,7 +262,14 @@ function App() {
   const [libraryBusy, setLibraryBusy] = useState(false);
   const [toolType, setToolType] = useState<"image" | "docx" | "pdf" | "pptx" | "xlsx">("image");
   const [toolPrompt, setToolPrompt] = useState("");
-  const [toolResult, setToolResult] = useState<{ url: string; fileName: string; image?: boolean } | null>(null);
+  const [toolTitle, setToolTitle] = useState("");
+  const [toolResult, setToolResult] = useState<ExploreResult | null>(null);
+  const [toolPreview, setToolPreview] = useState(false);
+  const [toolStyle, setToolStyle] = useState("");
+  const [toolAspect, setToolAspect] = useState("1:1");
+  const [toolImageFormat, setToolImageFormat] = useState("png");
+  const [toolProviders, setToolProviders] = useState<{ groq?: boolean; stability?: boolean } | null>(null);
+  const [imageHistory, setImageHistory] = useState<Array<{ prompt: string; previewUrl: string; fileName: string }>>([]);
   const [toolBusy, setToolBusy] = useState(false);
   const [voiceActive, setVoiceActive] = useState(false);
   const [speaking, setSpeaking] = useState(false);
@@ -827,16 +842,48 @@ function App() {
     setToolResult(null);
     try {
       if (toolType === "image") {
-        const result = await request<{ url: string; fileName: string }>("/api/images/generate", jsonRequest("POST", { prompt: toolPrompt }));
-        setToolResult({ ...result, image: true });
+        const result = await request<{ fileName: string; mimeType: string; imageData: string }>("/api/images/generate", jsonRequest("POST", { prompt: toolPrompt, aspectRatio: toolAspect, stylePreset: toolStyle, outputFormat: toolImageFormat, includePreview: true }));
+        const previewUrl = `data:${result.mimeType};base64,${result.imageData}`;
+        setToolResult({ fileName: result.fileName, mimeType: result.mimeType, previewUrl });
+        setImageHistory(previous => [{ prompt: toolPrompt, previewUrl, fileName: result.fileName }, ...previous.filter(item => item.previewUrl !== previewUrl)].slice(0, 5));
+      } else if (toolType === "docx") {
+        const result = await request<{ title: string; content: string }>("/api/documents/draft", jsonRequest("POST", { prompt: toolPrompt, title: toolTitle || undefined }));
+        setToolResult({ title: result.title, content: result.content, fileName: `${result.title}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
       } else {
         const endpoint = toolType === "pdf" ? "/api/pdf/generate" : toolType === "pptx" ? "/api/presentations/generate" : "/api/documents/generate";
-        const result = await request<{ url: string; fileName: string }>(endpoint, jsonRequest("POST", { content: toolPrompt, format: toolType }));
-        setToolResult(result);
+        const result = await request<{ fileName: string; mimeType: string; content: string }>(endpoint, jsonRequest("POST", { content: toolPrompt, title: toolTitle || undefined, format: toolType, includeContent: true }));
+        setToolResult({ fileName: result.fileName, mimeType: result.mimeType, previewUrl: `data:${result.mimeType};base64,${result.content}` });
       }
     } catch (error) { setNotice(errorText(error)); }
     finally { setToolBusy(false); }
   }
+
+  async function exportDocument(format: "docx" | "pdf" | "txt") {
+    if (!toolResult?.content || !toolResult.title) return;
+    try {
+      const response = await fetch("/api/documents/export", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: toolResult.title, content: toolResult.content, format }) });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new ApiError(body.error || `Export failed (${response.status}).`, response.status);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${toolResult.title.replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "KOPLI_AI_Document"}.${format}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) { setNotice(errorText(error)); }
+  }
+
+  useEffect(() => {
+    if (section !== "Explore") return;
+    let active = true;
+    void request<{ groq?: boolean; stability?: boolean }>("/api/status").then(status => { if (active) setToolProviders(status); }).catch(error => { if (active) setNotice(errorText(error)); });
+    return () => { active = false; };
+  }, [section]);
 
   async function loadAdmin() {
     setSection("Admin");
@@ -979,27 +1026,49 @@ function App() {
 
         {section === "Explore" && <section className="page">
           <header className="page-heading"><h1>Explore</h1><p>Create useful content with KOPLI AI tools.</p></header>
-          <div className="tool-grid">
+          <div className="tool-grid explore-tool-grid">
             {([
-              ["image", ImageIcon, "Image generation", "Create an image from a text description."],
-              ["docx", FileText, "Documents", "Generate a formatted Word document."],
-              ["pdf", FileText, "PDF reports", "Create a printable PDF report."],
-              ["pptx", Library, "Presentations", "Generate a PowerPoint presentation."],
-              ["xlsx", Library, "Spreadsheets", "Create a structured workbook."]
-            ] as const).map(([type, Icon, title, description]) => <button className="tool-card" key={type} onClick={() => { setToolType(type); setToolResult(null); }}>
-              <span className="tool-icon"><Icon size={21} /></span><h3>{title}</h3><p>{description}</p><span>Open tool <ChevronRight size={14} /></span>
+              ["image", ImageIcon, "Image generation", "Create an image from a text description.", "/tools/explore-image.svg"],
+              ["docx", FileText, "Documents", "Draft, edit, preview, and export your document.", "/tools/explore-documents.svg"],
+              ["pdf", FileText, "PDF reports", "Generate a polished, printable report.", "/tools/explore-pdf.svg"],
+              ["pptx", Library, "Presentations", "Generate a professional slide deck.", "/tools/explore-presentations.svg"],
+              ["xlsx", Library, "Spreadsheets", "Turn a request into a structured workbook.", "/tools/explore-spreadsheet.svg"]
+            ] as const).map(([type, Icon, title, description, image]) => <button type="button" className={`tool-card explore-tool-card${toolType === type ? " selected" : ""}`} key={type} aria-pressed={toolType === type} onClick={() => { setToolType(type); setToolResult(null); }}>
+              <img className="explore-tool-image" src={image} alt="" loading="lazy" />
+              <span className="tool-icon"><Icon size={19} /></span><h3>{title}</h3><p>{description}</p><span className="explore-open-label">Open tool <ChevronRight size={14} /></span>
             </button>)}
           </div>
-          <div className="settings-card modern" style={{ maxWidth: 760, marginTop: 18, padding: 18 }}>
-            <form onSubmit={event => void generateContent(event)}>
-              <label htmlFor="tool-prompt"><strong>{toolType === "image" ? "Describe the image" : "Describe the content"}</strong></label>
-              <textarea id="tool-prompt" className="chat-search" style={{ width: "100%", height: 110, padding: 12, marginTop: 8 }} value={toolPrompt} onChange={event => setToolPrompt(event.target.value)} placeholder="Describe what you want KOPLI AI to create…" />
-              <button className="auth-submit" type="submit" disabled={toolBusy || !toolPrompt.trim()}>{toolBusy ? "Creating…" : `Create ${toolType.toUpperCase()}`}</button>
-            </form>
-            {toolResult && <div className="generated-image-card">
-              {toolResult.image && <img className="generated-image-preview" src={toolResult.url} alt={toolPrompt} />}
-              <div className="generated-image-toolbar"><span>{toolResult.fileName}</span><div><a href={toolResult.url} download={toolResult.fileName} aria-label="Download generated file"><Download size={17} /></a></div></div>
+          <div className="settings-card modern explore-workspace" aria-label={`${toolType} tool`}>
+            {!user && <div className="explore-provider-note"><strong>Sign in to create and download files</strong><span>Generated files are private to your account.</span><button type="button" onClick={() => setAuthOpen(true)}>Sign in</button></div>}
+            {user && toolProviders && ((toolType === "image" && !toolProviders.stability) || (toolType !== "image" && !toolProviders.groq)) && <div className="explore-provider-note" role="status">
+              <strong>{toolType === "image" ? "Image generation needs provider setup" : "AI file generation needs provider setup"}</strong>
+              <span>{toolType === "image" ? "Configure STABILITY_API_KEY in the existing service to enable image generation." : "Configure GROQ_API_KEY in the existing service to enable document generation."}</span>
             </div>}
+            <div className="explore-form-heading"><div><span className="eyebrow">KOPLI AI TOOL</span><h2>{({image:"Image generation",docx:"Documents",pdf:"PDF reports",pptx:"Presentations",xlsx:"Spreadsheets"})[toolType]}</h2></div>{toolResult && <button type="button" className="explore-text-action" onClick={() => { setToolResult(null); setToolPreview(false); }}>Clear result</button>}</div>
+            <form onSubmit={event => void generateContent(event)}>
+              {toolType !== "image" && <label className="explore-field"><span>Title <small>(optional)</small></span><input className="chat-search" value={toolTitle} onChange={event => setToolTitle(event.target.value)} maxLength={160} placeholder="Give your file a title" /></label>}
+              {toolType === "image" && <div className="explore-image-options">
+                <label className="explore-field"><span>Style</span><select className="chat-search" value={toolStyle} onChange={event => setToolStyle(event.target.value)}><option value="">Automatic</option><option value="photographic">Photographic</option><option value="digital-art">Digital art</option><option value="3d-model">3D</option><option value="cinematic">Cinematic</option><option value="anime">Anime</option><option value="isometric">Isometric</option><option value="line-art">Line art</option></select></label>
+                <label className="explore-field"><span>Aspect ratio</span><select className="chat-search" value={toolAspect} onChange={event => setToolAspect(event.target.value)}>{["1:1","16:9","3:2","4:5","2:3","9:16","21:9","5:4"].map(value => <option key={value}>{value}</option>)}</select></label>
+                <label className="explore-field"><span>File type</span><select className="chat-search" value={toolImageFormat} onChange={event => setToolImageFormat(event.target.value)}><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></label>
+              </div>}
+              <label className="explore-field" htmlFor="tool-prompt"><span>{toolType === "image" ? "Describe the image" : "What should KOPLI AI create?"}</span>
+                <textarea id="tool-prompt" className="chat-search" value={toolPrompt} onChange={event => setToolPrompt(event.target.value)} maxLength={10000} placeholder={toolType === "image" ? "Describe the subject, composition, lighting, and mood…" : "Describe the content, audience, key points, and any details to include…"} />
+              </label>
+              <div className="explore-form-footer"><span>{toolPrompt.length.toLocaleString()} / 10,000</span><button className="auth-submit" type="submit" disabled={!user || toolBusy || !toolPrompt.trim() || (toolProviders ? toolType === "image" ? !toolProviders.stability : !toolProviders.groq : false)}>{toolBusy ? "Creating…" : toolType === "image" && toolResult ? "Regenerate image" : `Create ${toolType.toUpperCase()}`}</button></div>
+            </form>
+            {toolBusy && <p className="explore-status" role="status">KOPLI AI is creating your {toolType === "image" ? "image" : toolType === "docx" ? "document draft" : toolType.toUpperCase()}…</p>}
+            {toolResult && <div className="generated-image-card explore-result">
+              {toolType === "image" && toolResult.previewUrl && <img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || "AI generated image"} />}
+              {toolType === "pdf" && toolResult.previewUrl && <iframe className="explore-pdf-preview" src={toolResult.previewUrl} title={toolResult.fileName} />}
+              {toolType === "docx" && toolResult.content !== undefined && <>
+                <div className="explore-result-tabs"><button type="button" className={!toolPreview ? "active" : ""} onClick={() => setToolPreview(false)}>Edit</button><button type="button" className={toolPreview ? "active" : ""} onClick={() => setToolPreview(true)}>Preview</button></div>
+                {toolPreview ? <div className="explore-document-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{toolResult.content}</ReactMarkdown></div> : <textarea aria-label="Edit document content" className="explore-document-editor" value={toolResult.content} onChange={event => setToolResult(previous => previous ? { ...previous, content: event.target.value } : previous)} />}
+                <div className="explore-export-actions">{(["docx","pdf","txt"] as const).map(format => <button key={format} type="button" onClick={() => void exportDocument(format)}><Download size={15} /> Download {format.toUpperCase()}</button>)}<button type="button" onClick={() => void copyText(toolResult.content || "")}><Copy size={15} /> Copy</button></div>
+              </>}
+              <div className="generated-image-toolbar"><span>{toolResult.fileName}</span><div>{toolType !== "docx" && toolResult.previewUrl && <a href={toolResult.previewUrl} download={toolResult.fileName} aria-label="Download generated file"><Download size={17} /> Download</a>}</div></div>
+            </div>}
+            {toolType === "image" && imageHistory.length > 0 && <div className="explore-history"><strong>Recent images</strong><div>{imageHistory.map(item => <button key={item.fileName} type="button" title={item.prompt} onClick={() => { setToolResult({ fileName: item.fileName, previewUrl: item.previewUrl }); setToolPrompt(item.prompt); }}><img src={item.previewUrl} alt="" /><span>{item.prompt}</span></button>)}</div></div>}
           </div>
         </section>}
 

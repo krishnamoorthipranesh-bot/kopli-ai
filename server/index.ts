@@ -1004,7 +1004,16 @@ app.post("/api/images/generate", async (req, res) => {
   if (!user) return res.status(401).json({ error: "Sign in to generate images." });
   const prompt = String(req.body?.prompt || "").trim();
   if (!prompt) return res.status(400).json({ error: "Image prompt cannot be empty." });
-  if (!configured(process.env.STABILITY_API_KEY)) return res.status(503).json({ error: "Demo mode: STABILITY_API_KEY is not configured." });
+  if (prompt.length > 10000) return res.status(400).json({ error: "Image prompts must be 10,000 characters or fewer." });
+  if (!configured(process.env.STABILITY_API_KEY)) return res.status(503).json({ error: "Image generation is not configured. Set up STABILITY_API_KEY in the existing service." });
+  const aspectRatio = String(req.body?.aspectRatio || "1:1");
+  const allowedAspectRatios = new Set(["21:9", "16:9", "3:2", "5:4", "1:1", "4:5", "2:3", "9:16", "9:21"]);
+  if (!allowedAspectRatios.has(aspectRatio)) return res.status(400).json({ error: "Choose a supported image aspect ratio." });
+  const stylePreset = String(req.body?.stylePreset || "");
+  const allowedStylePresets = new Set(["", "enhance", "anime", "photographic", "digital-art", "comic-book", "fantasy-art", "line-art", "analog-film", "neon-punk", "isometric", "low-poly", "origami", "modeling-compound", "cinematic", "3d-model", "pixel-art", "tile-texture"]);
+  if (!allowedStylePresets.has(stylePreset)) return res.status(400).json({ error: "Choose a supported image style." });
+  const outputFormat = String(req.body?.outputFormat || "png");
+  if (!new Set(["png", "jpeg", "webp"]).has(outputFormat)) return res.status(400).json({ error: "Choose PNG, JPEG, or WebP output." });
   let enhancedPrompt = prompt;
   if (groq) {
     try {
@@ -1017,22 +1026,34 @@ app.post("/api/images/generate", async (req, res) => {
         ]
       });
       enhancedPrompt = completion.choices[0]?.message?.content?.trim() || prompt;
-    } catch {}
+    } catch (error) {
+      console.error("Image prompt enhancement failed; using the original prompt.", error);
+    }
   }
   const form = new FormData();
   form.set("prompt", enhancedPrompt);
-  form.set("output_format", "png");
-  const response = await fetch("https://api.stability.ai/v2beta/stable-image/generate/core", {
-    method: "POST",
-    headers: { Accept: "image/*", Authorization: `Bearer ${process.env.STABILITY_API_KEY}` },
-    body: form
-  });
+  form.set("aspect_ratio", aspectRatio);
+  form.set("output_format", outputFormat);
+  if (stylePreset) form.set("style_preset", stylePreset);
+  let response: Response;
+  try {
+    response = await fetch("https://api.stability.ai/v2beta/stable-image/generate/core", {
+      method: "POST",
+      headers: { Accept: "image/*", Authorization: `Bearer ${process.env.STABILITY_API_KEY}` },
+      body: form
+    });
+  } catch (error) {
+    console.error("Image provider request failed.", error);
+    return res.status(502).json({ error: "Image generation could not reach the provider. Please try again." });
+  }
   if (!response.ok) {
     let detail = `Stability AI returned ${response.status}`;
     try {
       const errorBody = await response.text();
       if (errorBody) detail = `${detail}: ${errorBody.slice(0, 500)}`;
-    } catch {}
+    } catch (error) {
+      console.error("Could not read the image provider error response.", error);
+    }
     return res.status(response.status).json({ error: detail });
   }
   const contentType = response.headers.get("content-type") || "image/png";
@@ -1051,9 +1072,10 @@ app.post("/api/images/generate", async (req, res) => {
   if (prisma) {
     void prisma.storedFile.create({
       data: { id, userId: user.id, name: `${id}.${actualFormat}`, mimeType: `image/${actualFormat === "jpg" ? "jpeg" : actualFormat}`, size: buffer.length, path: file, kind: "image" }
-    }).catch(() => undefined);
+    }).catch(error => console.error("Could not add the generated image to the library.", error));
   }
-  res.json({ id, url: `/api/images/${id}`, prompt: enhancedPrompt, originalPrompt: prompt, mimeType: `image/${actualFormat === "jpg" ? "jpeg" : actualFormat}`, fileName: `${id}.${actualFormat}` });
+  const mimeType = `image/${actualFormat === "jpg" ? "jpeg" : actualFormat}`;
+  res.json({ id, url: `/api/images/${id}`, prompt: enhancedPrompt, originalPrompt: prompt, mimeType, fileName: `${id}.${actualFormat}`, ...(req.body?.includePreview === true ? { imageData: buffer.toString("base64") } : {}) });
 });
 
 app.get("/api/images/:imageId", async (req, res) => {
@@ -1161,94 +1183,87 @@ function extractSlideCount(prompt: string, fallback = 10) {
   return Math.max(6, Math.min(30, Number(match[1])));
 }
 
-async function generateStructuredContent(prompt: string, topic: string, format: "pptx" | "docx" | "pdf", slideCount?: number) {
-  if (!groq) {
-    if (format === "pptx") {
-      const count = slideCount || 10;
-      const titles = [
-        "Introduction", "Meaning and Definition", "Key Concepts", "Main Types", "Important Components",
-        "Common Challenges", "Real-World Applications", "Benefits", "Prevention and Safety Measures",
-        "Future Scope", "Conclusion"
-      ];
-      return {
-        title: topic,
-        subtitle: "A Professional Presentation",
-        slides: Array.from({ length: count }, (_, index) => index === 0
-          ? { title: topic, bullets: ["Professional overview", "Prepared by KOPLI AI"], layout: "title" }
-          : index === count - 1
-            ? { title: "Conclusion", bullets: [`Key lessons from ${topic}`, "Challenges and opportunities", "Practical next steps"], layout: "conclusion" }
-            : { title: titles[(index - 1) % titles.length], bullets: [`Overview of ${topic}`, "Important concepts and practical relevance", "Key points for analysis"], layout: "content" })
-      };
-    }
-    const sections = ["Introduction", "Background", "Core Concepts", "Applications", "Advantages", "Challenges", "Conclusion"];
-    return {
-      title: topic,
-      subtitle: "KOPLI AI Professional Report",
-      sections: sections.map((heading, index) => ({
-        heading,
-        paragraphs: [
-          index === 0
-            ? `${topic} is an important subject that requires a clear understanding of its purpose, context, and practical relevance.`
-            : `This section explains ${heading.toLowerCase()} about ${topic} in a structured and easy-to-understand format.`,
-          "The following overview summarizes key ideas, practical implications, and points that are useful for study and academic work."
-        ]
-      }))
-    };
-  }
+function generationError(statusCode: number, message: string) {
+  return Object.assign(new Error(message), { statusCode });
+}
 
+async function generateStructuredContent(prompt: string, topic: string, format: "pptx" | "docx" | "pdf" | "xlsx", slideCount?: number) {
+  if (!groq) throw generationError(503, "AI file generation is not configured. Set up GROQ_API_KEY in the existing service.");
+  const systemPrompt = format === "pptx"
+    ? `Create a professional presentation in valid JSON. Return only JSON with keys title, subtitle, slides. slides must contain title, bullets (4-6 short strings), layout ("title","content","comparison","diagram","conclusion"). Create exactly ${slideCount || 10} non-repeating slides, including a title slide and conclusion.`
+    : format === "xlsx"
+      ? "Create a useful spreadsheet from the request. Return only valid JSON with title, columns (an array of 2-12 short column labels), and rows (an array of up to 100 arrays of cell values, each matching the columns). Include realistic, relevant data only when the user requested examples or a sample; otherwise use only information supported by the request."
+      : "Create professional document content in valid JSON. Return only JSON with keys title, subtitle, sections. sections contain heading and paragraphs (string array). Include a clear introduction, detailed relevant sections, applications or practical guidance where useful, and a concise conclusion. Do not invent citations or references.";
+  let raw = "";
   try {
     const response = await groq.chat.completions.create({
       model: aiConfig.groqModel,
       temperature: 0.35,
       messages: [
-        {
-          role: "system",
-          content: format === "pptx"
-            ? `Create a professional presentation in valid JSON. Return only JSON with keys title, subtitle, slides. slides must contain title, bullets (4-6 short strings), layout ("title","content","comparison","diagram","conclusion"). Create exactly ${slideCount || 10} non-repeating slides, including a title slide and conclusion.`
-            : `Create professional academic content in valid JSON. Return only JSON with keys title, subtitle, sections. sections contain heading and paragraphs (string array). Include title, introduction, detailed core sections, applications, challenges, conclusion, and references.`
-        },
+        { role: "system", content: systemPrompt },
         { role: "user", content: `Topic/request: ${prompt}\nTopic title: ${topic}` }
       ]
     });
-    const raw = response.choices[0]?.message?.content || "";
+    raw = response.choices[0]?.message?.content || "";
+  } catch (error) {
+    console.error("AI file generation request failed.", error);
+    throw generationError(502, "The AI provider could not generate this file. Check the provider configuration and try again.");
+  }
+  try {
     const json = JSON.parse(raw.replace(/^```(?:json)?\s*/i, "").replace(/```$/i, "").trim());
+    if (!json || typeof json !== "object" || !String(json.title || topic).trim()) throw new Error("Missing generated title.");
+    if (format === "pptx" && (!Array.isArray(json.slides) || !json.slides.length)) throw new Error("Missing slide data.");
+    if (format === "xlsx" && (!Array.isArray(json.columns) || json.columns.length < 2 || !Array.isArray(json.rows) || !json.rows.length)) throw new Error("Missing spreadsheet data.");
+    if ((format === "docx" || format === "pdf") && (!Array.isArray(json.sections) || !json.sections.length)) throw new Error("Missing document sections.");
     return json;
-  } catch {
-    if (format === "pptx") {
-      return {
-        title: topic,
-        subtitle: "Professional Presentation",
-        slides: Array.from({ length: slideCount || 10 }, (_, index) => index === 0
-          ? { title: topic, bullets: ["Professional overview", "Prepared by KOPLI AI"], layout: "title" }
-          : index === (slideCount || 10) - 1
-            ? { title: "Conclusion", bullets: [`Key points from ${topic}`, "Challenges and opportunities", "Practical next steps"], layout: "conclusion" }
-            : { title: ["Introduction", "Key Concepts", "Applications", "Advantages", "Challenges", "Future Scope"][((index - 1) % 6)], bullets: [`Overview of ${topic}`, "Important concepts and practical relevance", "Key points for study and application"], layout: "content" })
-      };
-    }
-    return {
-      title: topic,
-      subtitle: "Professional Report",
-      sections: ["Introduction", "Background", "Core Concepts", "Applications", "Advantages", "Challenges", "Conclusion"].map((heading, index) => ({
-        heading,
-        paragraphs: [
-          index === 0 ? `${topic} is an important subject that requires clear understanding of its purpose, context, and practical relevance.` : `This section presents ${heading.toLowerCase()} related to ${topic}.`,
-          "This overview summarizes key ideas, practical implications, and useful points for academic and professional study."
-        ]
-      }))
-    };
+  } catch (error) {
+    console.error("AI provider returned invalid structured file content.", error);
+    throw generationError(502, "The AI provider returned an invalid file draft. Please try again.");
   }
 }
 
-function writeDocx(title: string, content: string, file: string) {
-  const paragraphs = content.split(/\n+/).filter(Boolean).map(line => new Paragraph({
+function structuredDocumentToMarkdown(structured: any, fallbackTitle: string) {
+  const lines = [`# ${String(structured.title || fallbackTitle).slice(0, 160)}`];
+  if (structured.subtitle) lines.push("", String(structured.subtitle).slice(0, 300));
+  for (const section of structured.sections || []) {
+    if (section.heading) lines.push("", `## ${String(section.heading).slice(0, 200)}`);
+    for (const paragraph of Array.isArray(section.paragraphs) ? section.paragraphs : []) {
+      if (typeof paragraph === "string" && paragraph.trim()) lines.push("", paragraph.trim());
+    }
+  }
+  return lines.join("\n").slice(0, 50000);
+}
+
+async function createDocxBuffer(title: string, content: string) {
+  const lines = content.split(/\n+/).filter(Boolean);
+  const paragraphs = lines.map(line => new Paragraph({
     text: line.replace(/^#+\s*/, ""),
     heading: /^#\s/.test(line) ? HeadingLevel.TITLE : /^##\s/.test(line) ? HeadingLevel.HEADING_1 : undefined
   }));
-  const doc = new Document({ sections: [{ properties: {}, children: [
-    new Paragraph({ children: [new TextRun({ text: title, bold: true, size: 48 })], spacing: { after: 300 } }),
-    ...paragraphs
-  ] }] });
-  return Packer.toBuffer(doc).then(buffer => fs.writeFileSync(file, buffer));
+  const children = lines.some(line => /^#\s/.test(line))
+    ? paragraphs
+    : [new Paragraph({ children: [new TextRun({ text: title, bold: true, size: 48 })], spacing: { after: 300 } }), ...paragraphs];
+  const doc = new Document({ sections: [{ properties: {}, children }] });
+  return Packer.toBuffer(doc);
+}
+
+function createPdfBuffer(title: string, content: string) {
+  return new Promise<Buffer>((resolve, reject) => {
+    const pdf = new PDFDocument({ margin: 54, size: "A4", info: { Title: title, Author: "KOPLI AI" } });
+    const chunks: Buffer[] = [];
+    pdf.on("data", chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    pdf.on("end", () => resolve(Buffer.concat(chunks)));
+    pdf.on("error", reject);
+    pdf.fillColor("#1d4ed8").fontSize(24).text(title, { align: "center" }).moveDown(1);
+    for (const line of content.split(/\n+/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed === title) continue;
+      if (trimmed.startsWith("## ")) pdf.moveDown(.5).fillColor("#1e293b").fontSize(15).text(trimmed.slice(3)).moveDown(.3);
+      else if (trimmed.startsWith("# ")) continue;
+      else pdf.fillColor("#334155").fontSize(11).text(trimmed, { align: "left", lineGap: 3 }).moveDown(.55);
+    }
+    pdf.end();
+  });
 }
 
 async function generateFile(req: express.Request, res: express.Response) {
@@ -1256,6 +1271,7 @@ async function generateFile(req: express.Request, res: express.Response) {
   if (!user) return res.status(401).json({ error: "Sign in to create documents." });
   const prompt = String(req.body?.content || req.body?.prompt || req.body?.topic || "").trim();
   if (!prompt) return res.status(400).json({ error: "Document prompt cannot be empty." });
+  if (prompt.length > 10000) return res.status(400).json({ error: "Prompts must be 10,000 characters or fewer." });
 
   const explicitFormat = String(req.body?.format || "").toLowerCase();
   const routeFormat = req.path.includes("present") ? "pptx" : req.path.includes("pdf") ? "pdf" : "";
@@ -1273,13 +1289,15 @@ async function generateFile(req: express.Request, res: express.Response) {
 
   try {
     if (format === "xlsx" || format === "xls") {
+      const structured = await generateStructuredContent(prompt, topic, "xlsx") as any;
       const workbook = XLSX.utils.book_new();
-      const rows = prompt.split(/\n+/).filter(Boolean).map(line => [line]);
-      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["Title", topic], ...rows]), "Sheet1");
+      const rows = [structured.columns, ...structured.rows.slice(0, 100).map((row: unknown[]) => structured.columns.map((_: unknown, index: number) => String(row[index] ?? "").slice(0, 500)))];
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "Data");
       const file = path.join(generated, `${id}.xlsx`);
-      XLSX.writeFile(workbook, file);
-      if (prisma) void prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: fs.statSync(file).size, path: file, kind: "document" } }).catch(() => undefined);
-      return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Workbook.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", url: `/api/files/${id}.xlsx`, format: "XLSX" });
+      const bytes = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+      fs.writeFileSync(file, bytes);
+      if (prisma) void prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: bytes.length, path: file, kind: "document" } }).catch(error => console.error("Could not add the generated spreadsheet to the library.", error));
+      return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Workbook.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", url: `/api/files/${id}.xlsx`, format: "XLSX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
     if (format === "pdf") {
@@ -1300,8 +1318,9 @@ async function generateFile(req: express.Request, res: express.Response) {
         pdf.on("end", resolve);
         pdf.on("error", reject);
       });
-      if (prisma) void prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.pdf`, mimeType: "application/pdf", size: fs.statSync(file).size, path: file, kind: "document" } }).catch(() => undefined);
-      return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Report.pdf`, mimeType: "application/pdf", url: `/api/files/${id}.pdf`, format: "PDF" });
+      const bytes = fs.readFileSync(file);
+      if (prisma) void prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.pdf`, mimeType: "application/pdf", size: bytes.length, path: file, kind: "document" } }).catch(error => console.error("Could not add the generated PDF to the library.", error));
+      return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Report.pdf`, mimeType: "application/pdf", url: `/api/files/${id}.pdf`, format: "PDF", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
     if (format === "pptx" || format === "ppt") {
@@ -1340,8 +1359,9 @@ async function generateFile(req: express.Request, res: express.Response) {
       file = path.join(generated, `${id}.pptx`);
       await (pptx as any).writeFile({ fileName: file });
       if (!fs.existsSync(file) || fs.statSync(file).size < 1000) throw new Error("PowerPoint file generation produced an invalid file.");
-      if (prisma) void prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", size: fs.statSync(file).size, path: file, kind: "document" } }).catch(() => undefined);
-      return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Presentation.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", url: `/api/files/${id}.pptx`, format: "PPTX", slideCount: slides.length });
+      const bytes = fs.readFileSync(file);
+      if (prisma) void prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", size: bytes.length, path: file, kind: "document" } }).catch(error => console.error("Could not add the generated presentation to the library.", error));
+      return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Presentation.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", url: `/api/files/${id}.pptx`, format: "PPTX", slideCount: slides.length, ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
     const structured = await generateStructuredContent(prompt, topic, "docx") as any;
@@ -1364,12 +1384,51 @@ async function generateFile(req: express.Request, res: express.Response) {
     file = path.join(generated, `${id}.docx`);
     await Packer.toBuffer(doc).then(buffer => fs.writeFileSync(file, buffer));
     if (!fs.existsSync(file) || fs.statSync(file).size < 1000) throw new Error("Word file generation produced an invalid file.");
-    if (prisma) void prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: fs.statSync(file).size, path: file, kind: "document" } }).catch(() => undefined);
-    return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Document.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", url: `/api/files/${id}.docx`, format: "DOCX" });
+    const bytes = fs.readFileSync(file);
+    if (prisma) void prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: bytes.length, path: file, kind: "document" } }).catch(error => console.error("Could not add the generated document to the library.", error));
+    return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Document.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", url: `/api/files/${id}.docx`, format: "DOCX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
   } catch (error: any) {
-    res.status(500).json({ error: error?.message || "Document generation failed." });
+    res.status(error?.statusCode || 500).json({ error: error?.message || "Document generation failed." });
   }
 }
+
+app.post("/api/documents/draft", async (req, res) => {
+  const user = await currentUser(req);
+  if (!user) return res.status(401).json({ error: "Sign in to create documents." });
+  const prompt = String(req.body?.prompt || "").trim();
+  const title = String(req.body?.title || "Document").trim().slice(0, 160) || "Document";
+  if (!prompt) return res.status(400).json({ error: "Document prompt cannot be empty." });
+  if (prompt.length > 10000) return res.status(400).json({ error: "Prompts must be 10,000 characters or fewer." });
+  try {
+    const structured = await generateStructuredContent(prompt, title, "docx") as any;
+    res.json({ title: String(structured.title || title).slice(0, 160), content: structuredDocumentToMarkdown(structured, title) });
+  } catch (error: any) {
+    res.status(error?.statusCode || 502).json({ error: error?.message || "Document drafting failed." });
+  }
+});
+
+app.post("/api/documents/export", async (req, res) => {
+  const user = await currentUser(req);
+  if (!user) return res.status(401).json({ error: "Sign in to export documents." });
+  const title = String(req.body?.title || "KOPLI AI Document").trim().slice(0, 160) || "KOPLI AI Document";
+  const content = String(req.body?.content || "").trim();
+  const format = String(req.body?.format || "docx").toLowerCase();
+  if (!content) return res.status(400).json({ error: "Document content cannot be empty." });
+  if (content.length > 50000) return res.status(400).json({ error: "Document content exceeds 50,000 characters." });
+  if (!["docx", "pdf", "txt"].includes(format)) return res.status(400).json({ error: "Choose DOCX, PDF, or TXT format." });
+  try {
+    const safeTitle = title.replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "KOPLI_AI_Document";
+    const mimeType = format === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : format === "pdf" ? "application/pdf" : "text/plain; charset=utf-8";
+    const bytes = format === "docx" ? await createDocxBuffer(title, content) : format === "pdf" ? await createPdfBuffer(title, content) : Buffer.from(content, "utf8");
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.${format}"`);
+    res.setHeader("Content-Length", bytes.length);
+    return res.send(bytes);
+  } catch (error) {
+    console.error("Document export failed.", error);
+    return res.status(500).json({ error: "The document could not be exported. Please try again." });
+  }
+});
 
 app.post("/api/documents/generate", generateFile);
 app.post("/api/presentations/generate", generateFile);

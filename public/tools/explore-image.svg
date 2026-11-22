@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 360" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="40" y1="20" x2="650" y2="350" gradientUnits="userSpaceOnUse"><stop stop-color="#101932"/><stop offset="1" stop-color="#251547"/></linearGradient>
+    <linearGradient id="orb" x1="244" y1="77" x2="437" y2="268" gradientUnits="userSpaceOnUse"><stop stop-color="#86F4FF"/><stop offset=".42" stop-color="#6B8CFF"/><stop offset="1" stop-color="#D75CFF"/></linearGradient>
+    <linearGradient id="ring" x1="151" y1="88" x2="528" y2="290" gradientUnits="userSpaceOnUse"><stop stop-color="#49E6FF"/><stop offset=".5" stop-color="#B67BFF"/><stop offset="1" stop-color="#FF78B8"/></linearGradient>
+    <radialGradient id="light" cx="0" cy="0" r="1" gradientTransform="matrix(172 92 -82 153 364 163)" gradientUnits="userSpaceOnUse"><stop stop-color="#6D4DFF" stop-opacity=".4"/><stop offset="1" stop-color="#6D4DFF" stop-opacity="0"/></radialGradient>
+    <filter id="shadow" x="174" y="62" width="381" height="274" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feGaussianBlur stdDeviation="18"/></filter>
+  </defs>
+  <rect width="720" height="360" rx="28" fill="url(#bg)"/><rect width="720" height="360" rx="28" fill="url(#light)"/>
+  <circle cx="105" cy="83" r="2" fill="#C6D2FF"/><circle cx="595" cy="89" r="3" fill="#B4A0FF"/><circle cx="583" cy="278" r="2" fill="#7AE6FF"/><circle cx="134" cy="264" r="3" fill="#FF9BE0"/>
+  <ellipse cx="366" cy="274" rx="142" ry="22" fill="#0A0E1C" fill-opacity=".65"/>
+  <ellipse cx="364" cy="186" rx="171" ry="88" stroke="url(#ring)" stroke-opacity=".7" stroke-width="2" transform="rotate(-17 364 186)"/>
+  <ellipse cx="364" cy="186" rx="137" ry="71" stroke="#B6A5FF" stroke-opacity=".28" stroke-width="1.5" transform="rotate(24 364 186)"/>
+  <circle cx="364" cy="170" r="84" fill="#6D4DFF" fill-opacity=".45" filter="url(#shadow)"/>
+  <circle cx="364" cy="164" r="76" fill="url(#orb)"/>
+  <path d="M303 150c16-36 59-58 99-48-34 2-63 26-74 56-14 39 6 79 43 92-51-4-86-48-77-100Z" fill="#fff" fill-opacity=".28"/>
+  <path d="M370 111c29 9 48 31 50 59-12-16-26-25-48-28-23-3-42 8-55 23 9-35 28-56 53-54Z" fill="#fff" fill-opacity=".55"/>
+  <path d="m492 86 10 20 22 3-16 15 4 22-20-11-19 11 4-22-16-15 22-3 9-20Z" fill="#FFE38B"/>
+  <path d="m235 235 7 14 16 2-12 11 3 16-14-8-14 8 3-16-12-11 16-2 7-14Z" fill="#71EEFF"/>
+  <circle cx="522" cy="235" r="8" fill="#FF80C8"/><circle cx="202" cy="125" r="6" fill="#82FFD8"/>
+</svg>
