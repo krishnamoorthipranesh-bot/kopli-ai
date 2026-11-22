@@ -17,3 +17,7 @@ services:
         sync: false
       - key: KOPLI_ADMIN_SECRET
         generateValue: true
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b

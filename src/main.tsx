@@ -251,6 +251,7 @@ function App() {
   const [toolBusy, setToolBusy] = useState(false);
   const [voiceActive, setVoiceActive] = useState(false);
   const [adminStatus, setAdminStatus] = useState<Record<string, boolean> | null>(null);
+  const [adminUsers, setAdminUsers] = useState<Array<{ id: string; email: string; name: string | null; role: string; createdAt: string }>>([]);
   const [adminBusy, setAdminBusy] = useState(false);
   const [settingsDetail, setSettingsDetail] = useState("");
   const [settingsSearch, setSettingsSearch] = useState("");
@@ -498,8 +499,22 @@ function App() {
           const failure: unknown = await response.json().catch(() => null);
           const message = failure && typeof failure === "object" && "error" in failure
             ? String((failure as ApiErrorBody).error || `Request failed (${response.status}).`)
-            : `Request failed (${response.status}).`;
+            : failure && typeof failure === "object" && "response" in failure
+              ? String((failure as { response?: string }).response || `Request failed (${response.status}).`)
+              : `Request failed (${response.status}).`;
           throw new ApiError(message, response.status);
+        }
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          const result = await response.json() as { response?: string; openAdmin?: boolean; error?: string };
+          if (result.error && !result.response) throw new Error(result.error);
+          setMessages(previous => previous.map(message => message.id === assistantId
+            ? { ...message, content: result.response || result.error || "Command processed.", streaming: false }
+            : message));
+          if (result.openAdmin) {
+            void loadAdmin();
+          }
+          return;
         }
         if (!response.body) throw new Error("The chat response stream is unavailable.");
         const reader = response.body.getReader();
@@ -739,7 +754,14 @@ function App() {
   async function loadAdmin() {
     setSection("Admin");
     setAdminBusy(true);
-    try { setAdminStatus((await request<{ providerStatus: Record<string, boolean> }>("/api/admin/status")).providerStatus); }
+    try {
+      const [statusRes, usersRes] = await Promise.all([
+        request<{ providerStatus: Record<string, boolean> }>("/api/admin/status"),
+        request<{ users: typeof adminUsers }>("/api/admin/users").catch(() => ({ users: [] }))
+      ]);
+      setAdminStatus(statusRes.providerStatus);
+      setAdminUsers(usersRes.users || []);
+    }
     catch (error) { setNotice(errorText(error)); }
     finally { setAdminBusy(false); }
   }
@@ -975,8 +997,17 @@ function App() {
           </div>
         </section>}
 
-        {section === "Admin" && <section className="page"><header className="page-heading"><h1>Admin status</h1><p>Provider configuration for this deployment.</p></header>
-          {adminBusy ? <p role="status">Checking provider status…</p> : adminStatus ? <div className="settings-card">{Object.entries(adminStatus).map(([key, enabled]) => <div className="settings-row" key={key}><div><strong>{key.toUpperCase()}</strong><span>{enabled ? "Configured" : "Not configured"}</span></div><span>{enabled ? "Ready" : "Unavailable"}</span></div>)}</div> : <p>Admin status is unavailable.</p>}
+        {section === "Admin" && <section className="page"><header className="page-heading"><h1>Admin dashboard</h1><p>Provider configuration and user management for this deployment.</p></header>
+          {adminBusy ? <p role="status">Checking admin status…</p> : adminStatus ? <>
+            <div className="settings-card">
+              <h2 style={{ fontSize: "1.1rem", marginBottom: 12 }}>Provider Status</h2>
+              {Object.entries(adminStatus).map(([key, enabled]) => <div className="settings-row" key={key}><div><strong>{key.toUpperCase()}</strong><span>{enabled ? "Configured" : "Not configured"}</span></div><span>{enabled ? "Ready" : "Unavailable"}</span></div>)}
+            </div>
+            {adminUsers.length > 0 && <div className="settings-card" style={{ marginTop: 16 }}>
+              <h2 style={{ fontSize: "1.1rem", marginBottom: 12 }}>Registered Users ({adminUsers.length})</h2>
+              {adminUsers.map(u => <div className="settings-row" key={u.id}><div><strong>{u.name ? `${u.name} (${u.email})` : u.email}</strong><span>Role: {u.role}</span></div><span>{new Date(u.createdAt).toLocaleDateString()}</span></div>)}
+            </div>}
+          </> : <p>Admin status is unavailable.</p>}
         </section>}
       </main>
 

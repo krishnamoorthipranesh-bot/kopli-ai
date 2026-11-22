@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
+import { execSync } from "node:child_process";
 import Groq from "groq-sdk";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, Header, Footer } from "docx";
 import PDFDocument from "pdfkit";
@@ -41,11 +42,26 @@ app.use(helmet({
     }
   }
 }));
+export function isAllowedOrigin(origin?: string, hostHeader?: string): boolean {
+  if (!origin) return true;
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
+  if (process.env.RENDER_EXTERNAL_URL && origin.toLowerCase() === process.env.RENDER_EXTERNAL_URL.toLowerCase()) return true;
+  if (/^https:\/\/[a-z0-9-]+\.onrender\.com$/i.test(origin)) return true;
+  if (process.env.ALLOWED_ORIGINS) {
+    const list = process.env.ALLOWED_ORIGINS.split(",").map(item => item.trim().toLowerCase());
+    if (list.includes(origin.toLowerCase())) return true;
+  }
+  if (hostHeader) {
+    const normalizedHost = hostHeader.toLowerCase();
+    if (origin.toLowerCase() === `http://${normalizedHost}` || origin.toLowerCase() === `https://${normalizedHost}`) return true;
+  }
+  return false;
+}
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-    const allowed = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-    callback(allowed ? null : new Error("Cross-origin request blocked"), allowed);
+    if (isAllowedOrigin(origin)) return callback(null, true);
+    callback(new Error("Cross-origin request blocked"), false);
   },
   credentials: true
 }));
@@ -65,7 +81,16 @@ const uploads = path.join(storage, "uploads");
 for (const dir of [storage, generated, uploads]) fs.mkdirSync(dir, { recursive: true });
 
 const conversations = new Map<string, { id: string; title: string; archived: boolean; pinned: boolean; mode: string; messages: Array<{ role: "user" | "assistant"; content: string }> }>();
-const configured = (value?: string) => Boolean(value && !/^YOUR_/i.test(value));
+const configured = (value?: string) => Boolean(value && !/^YOUR_/i.test(value) && !/^replace_/i.test(value));
+if (configured(process.env.DATABASE_URL)) {
+  try {
+    console.log("Checking database schema and migrations...");
+    execSync("npx prisma migrate deploy", { stdio: "inherit" });
+    console.log("Database migrations applied successfully.");
+  } catch (err: any) {
+    console.error("Database migration check note:", err?.message || err);
+  }
+}
 const groq = aiConfig.groqConfigured ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
 const prisma = configured(process.env.DATABASE_URL) ? new PrismaClient() : null;
 const sessionStore = new Map<string, { email: string; role: "user" | "owner"; expiresAt: number }>();
@@ -155,7 +180,7 @@ app.use((req, res, next) => {
   }
   if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
     const origin = req.headers.origin;
-    if (origin && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    if (origin && !isAllowedOrigin(origin, req.headers.host)) {
       return res.status(403).json({ error: "Cross-origin request blocked." });
     }
   }
@@ -863,29 +888,37 @@ app.delete("/api/conversations/:id", async (req, res) => {
   res.status(204).end();
 });
 
-app.post("/api/search", async (req, res) => {
-  const prompt = String(req.body?.query || "").trim();
-  if (!prompt) return res.status(400).json({ error: "Search query cannot be empty." });
-  if (!configured(process.env.TAVILY_API_KEY)) return res.status(503).json({ error: "Demo mode: TAVILY_API_KEY is not configured.", sources: [] });
+async function performSearch(prompt: string): Promise<{ query: string; queries: string[]; sources: any[] }> {
   const queries = splitQuery(prompt);
   const seen = new Set<string>();
   const sources: any[] = [];
   for (const query of queries) {
-    try {
-      const client = tavily({ apiKey: process.env.TAVILY_API_KEY });
-      const data = await client.search(query, {
-        searchDepth: "advanced",
-        maxResults: 5,
-        includeFavicon: true
-      });
-      for (const result of data.results || []) {
-        if (!seen.has(result.url)) { seen.add(result.url); sources.push(result); }
+    const client = tavily({ apiKey: process.env.TAVILY_API_KEY });
+    const data = await client.search(query, {
+      searchDepth: "advanced",
+      maxResults: 5,
+      includeFavicon: true
+    });
+    for (const result of data.results || []) {
+      if (!seen.has(result.url)) {
+        seen.add(result.url);
+        sources.push(result);
       }
-    } catch (error: any) {
-      return res.status(502).json({ error: error.message, sources: [] });
     }
   }
-  res.json({ query: prompt, queries, sources: sources.slice(0, 20) });
+  return { query: prompt, queries, sources: sources.slice(0, 20) };
+}
+
+app.post("/api/search", async (req, res) => {
+  const prompt = String(req.body?.query || "").trim();
+  if (!prompt) return res.status(400).json({ error: "Search query cannot be empty." });
+  if (!configured(process.env.TAVILY_API_KEY)) return res.status(503).json({ error: "Demo mode: TAVILY_API_KEY is not configured.", sources: [] });
+  try {
+    const searchData = await performSearch(prompt);
+    res.json(searchData);
+  } catch (error: any) {
+    return res.status(502).json({ error: error?.message || "Search failed.", sources: [] });
+  }
 });
 
 app.post("/api/chat/search", async (req, res) => {
@@ -900,14 +933,14 @@ app.post("/api/chat/search", async (req, res) => {
     ? await prisma.conversation.findUnique({ where: { id: conversationId }, select: { id: true, userId: true } })
     : null;
   if (existing && user && existing.userId !== user.id) return res.status(404).json({ error: "Conversation not found." });
-  const search = await fetch(`http://localhost:${process.env.PORT || 8787}/api/search`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query: prompt })
-  });
-  const data = await search.json() as { sources?: any[] };
-  if (!search.ok) return res.status(search.status).json(data);
-  const context = (data.sources || []).map((s, i) => `[${i + 1}] ${s.title}\n${s.url}\n${s.content || s.snippet || ""}`).join("\n\n");
+  let sources: any[] = [];
+  try {
+    const searchData = await performSearch(prompt);
+    sources = searchData.sources || [];
+  } catch (error: any) {
+    return res.status(502).json({ error: error?.message || "Search failed.", sources: [] });
+  }
+  const context = sources.map((s, i) => `[${i + 1}] ${s.title}\n${s.url}\n${s.content || s.snippet || ""}`).join("\n\n");
   let answer = "";
   try {
     const completion = await groq.chat.completions.create({
@@ -919,9 +952,9 @@ app.post("/api/chat/search", async (req, res) => {
     });
     answer = completion.choices[0]?.message?.content || "";
   } catch (error: any) {
-    return res.status(502).json({ error: error.message, sources: data.sources || [] });
+    return res.status(502).json({ error: error?.message || "Groq search completion failed.", sources });
   }
-  if (!answer.trim()) return res.status(502).json({ error: "The research answer was empty.", sources: data.sources || [] });
+  if (!answer.trim()) return res.status(502).json({ error: "The research answer was empty.", sources });
   if (user && prisma && answer) {
     try {
       if (existing) {
@@ -956,7 +989,7 @@ app.post("/api/chat/search", async (req, res) => {
       console.error("Could not check researched conversation memory preference:", error);
     }
   }
-  res.json({ answer, sources: data.sources || [], conversationId });
+  res.json({ answer, sources, conversationId });
 });
 
 app.post("/api/images/generate", async (req, res) => {
@@ -1427,5 +1460,8 @@ app.use((_req, res) => {
   res.type("html").send(fs.readFileSync(indexFile));
 });
 
+export { app };
 const port = Number(process.env.PORT || 8787);
-app.listen(port, () => console.log(`KOPLI AI server listening on http://localhost:${port}`));
+if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+  app.listen(port, () => console.log(`KOPLI AI server listening on http://localhost:${port}`));
+}

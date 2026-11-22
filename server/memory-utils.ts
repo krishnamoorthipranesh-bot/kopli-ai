@@ -1,10 +1,10 @@
 const memoryStopWords = new Set([
-  "about", "after", "again", "been", "before", "continue", "conversation",
-  "could", "did", "discuss", "discussed", "from", "have", "help", "last", "later",
-  "me", "more", "most", "my", "our", "please", "previous", "remember",
-  "same", "tell", "that", "them", "then", "there", "they", "this", "time",
-  "told", "what", "when", "where", "which", "with", "were", "would",
-  "yesterday", "your"
+  "about", "after", "again", "and", "are", "been", "before", "can", "continue", "conversation",
+  "could", "did", "discuss", "discussed", "for", "from", "have", "help", "how", "last", "later",
+  "me", "more", "most", "my", "not", "our", "please", "previous", "remember",
+  "same", "tell", "that", "the", "them", "then", "there", "they", "this", "time",
+  "told", "what", "when", "where", "which", "who", "why", "with", "were", "would",
+  "yesterday", "you", "your"
 ]);
 
 export function isPastContextQuery(text: string) {
