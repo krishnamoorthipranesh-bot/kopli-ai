@@ -1,1182 +1,340 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
-import { createRoot } from "react-dom/client";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import {
-  ArrowLeft, Bell, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, Code2,
-  Copy, Download, Eye, FileText, Globe2, Image as ImageIcon, Library,
-  LogIn, LogOut, Menu, Mic, Moon, CircleHelp, MoreHorizontal, Paperclip, Plus, Search,
-  Send, Settings, Shield, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
-  UserRound, Volume2, X, Zap
-} from "lucide-react";
-import "./styles.css";
-import "./theme.css";
-import "./chat-theme.css";
-
-type Mode = "fast" | "smart" | "reasoning" | "coding" | "research" | "vision";
-type Section = "Chat" | "Search" | "Explore" | "Library" | "Settings" | "Admin";
-type Rating = "helpful" | "not_helpful";
-type IconComponent = typeof Sparkles;
-
-interface User {
-  email: string;
-  name: string | null;
-  role: "user" | "owner";
-}
-
-interface Source {
-  title?: string;
-  url: string;
-  content?: string;
-}
-
-interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  createdAt?: string;
-  sources?: Source[];
-  streaming?: boolean;
-}
-
-interface Conversation {
-  id: string;
-  title: string;
-  mode: string;
-  archived?: boolean;
-  pinned?: boolean;
-  messages: ChatMessage[];
-}
-
-interface Preference {
-  learning: boolean;
-  crossChat: boolean;
-  language: string;
-  personality: string;
-}
-
-interface SavedMemory {
-  id: string;
-  category: string;
-  content: string;
-  updatedAt: string;
-}
-
-interface LibraryFile {
-  fileName: string;
-  size: number;
-  type: string;
-  url: string;
-  updatedAt: string;
-}
-
-interface ExploreResult {
-  fileName: string;
-  mimeType?: string;
-  previewUrl?: string;
-  content?: string;
-  title?: string;
-}
-
-interface UploadedFile {
-  id: string;
-  fileName: string;
-  mimeType: string;
-  size: number;
-  url: string;
-}
-
-interface ApiErrorBody {
-  error?: string;
-}
-
-interface SpeechResultLike {
-  results: ArrayLike<ArrayLike<{ transcript: string }>>;
-}
-
-interface SpeechRecognitionLike {
-  lang: string;
-  interimResults: boolean;
-  onresult: ((event: SpeechResultLike) => void) | null;
-  onerror: ((event: { error: string }) => void) | null;
-  onend: (() => void) | null;
-  start(): void;
-  stop(): void;
-}
-
-interface SpeechWindow extends Window {
-  SpeechRecognition?: new () => SpeechRecognitionLike;
-  webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-}
-
-class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
-
-async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-  const response = await fetch(url, { ...init, credentials: "include", headers });
-  if (response.status === 204) return undefined as T;
-  const body: unknown = await response.json().catch(() => null);
-  if (!response.ok) {
-    const message = body && typeof body === "object" && "error" in body
-      ? String((body as ApiErrorBody).error || `Request failed (${response.status}).`)
-      : `Request failed (${response.status}).`;
-    throw new ApiError(message, response.status);
-  }
-  return body as T;
-}
-
-function jsonRequest(method: string, body?: unknown): RequestInit {
-  return { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) };
-}
-
-function makeId() {
-  return crypto.randomUUID();
-}
-
-function getGuestHistory(): Conversation[] {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem("kopli.guest-conversations.v1") || "[]");
-    if (!Array.isArray(value)) return [];
-    return value.filter((item): item is Conversation =>
-      item && typeof item.id === "string" && typeof item.title === "string" && Array.isArray(item.messages)
-    );
-  } catch (error) {
-    console.error("Could not read local chat history:", error);
-    return [];
-  }
-}
-
-function errorText(error: unknown) {
-  return error instanceof Error ? error.message : "Something went wrong. Please try again.";
-}
-
-const modes: Array<{ id: Mode; label: string; detail: string; icon: IconComponent }> = [
-  { id: "fast", label: "Fast", detail: "Quick response", icon: Zap },
-  { id: "smart", label: "Smart", detail: "Balanced assistant", icon: Sparkles },
-  { id: "reasoning", label: "Reasoning", detail: "Complex analysis", icon: Brain },
-  { id: "coding", label: "Coding", detail: "Programming assistant", icon: Code2 },
-  { id: "research", label: "Research", detail: "Real web sources", icon: Globe2 },
-  { id: "vision", label: "Vision", detail: "Image-aware workflow", icon: Eye }
-];
-
-const navigation: Array<{ label: Section; icon: IconComponent }> = [
-  { label: "Chat", icon: Sparkles },
-  { label: "Search", icon: Search },
-  { label: "Explore", icon: Globe2 },
-  { label: "Library", icon: Library },
-  { label: "Settings", icon: Settings }
-];
-
-function MessageView({
-  message,
-  onFeedback,
-  onCopy,
-  onSpeak
-}: {
-  message: ChatMessage;
-  onFeedback: (message: ChatMessage, rating: Rating) => void;
-  onCopy: (text: string) => void;
-  onSpeak: (text: string) => void;
-}) {
-  const isUser = message.role === "user";
-  return (
-    <article className={`message ${message.role}${message.streaming ? " streaming" : ""}`}>
-      {!isUser && <div className="message-avatar" aria-hidden="true"><img className="hen-image hen-small" src="/logo.png" alt="" /></div>}
-      <div className="message-user-content">
-        <div className="message-content">
-          {message.content
-            ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-            : <div className="thinking-state" role="status"><span className="thinking-orb"><img className="thinking-logo" src="/logo.png" alt="" /></span><span className="thinking-wave"><i /><i /><i /></span><span>Thinking</span></div>}
-          {!!message.sources?.length && <div className="sources" aria-label="Sources">
-            {message.sources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">[{index + 1}] {source.title || source.url}</a>)}
-          </div>}
-        </div>
-        {!isUser && !message.streaming && message.content && <div className="message-actions" aria-label="Response actions">
-          <button type="button" aria-label="Copy response" title="Copy" onClick={() => onCopy(message.content)}><Copy size={16} /></button>
-          <button type="button" aria-label="Read response aloud" title="Read aloud" onClick={() => onSpeak(message.content)}><Volume2 size={16} /></button>
-          <button type="button" aria-label="Mark helpful" title="Helpful" onClick={() => onFeedback(message, "helpful")}><ThumbsUp size={16} /></button>
-          <button type="button" aria-label="Mark not helpful" title="Not helpful" onClick={() => onFeedback(message, "not_helpful")}><ThumbsDown size={16} /></button>
-        </div>}
-      </div>
-    </article>
-  );
-}
-
-function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [authOpen, setAuthOpen] = useState(false);
-  const [registering, setRegistering] = useState(false);
-  const [authBusy, setAuthBusy] = useState(false);
-  const [authError, setAuthError] = useState("");
-  const [authName, setAuthName] = useState("");
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [section, setSection] = useState<Section>("Chat");
-  const [sidebarOpen, setSidebarOpen] = useState(() => { if (window.matchMedia("(max-width: 900px)").matches) return false; try { const saved = localStorage.getItem("kopli.sidebar"); if (saved) return saved === "open"; } catch {} return false; });
-  const [mobileViewport, setMobileViewport] = useState(() => window.matchMedia("(max-width: 900px)").matches);
-  const [mode, setMode] = useState<Mode>("smart");
-  const [headerModeOpen, setHeaderModeOpen] = useState(false);
-  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [composerModeOpen, setComposerModeOpen] = useState(false);
-  const [dark, setDark] = useState(() => {
-    try { return localStorage.getItem("kopli.theme") !== "light"; }
-    catch (error) { console.error("Could not read theme preference:", error); return false; }
-  });
-  const [reduceEffects, setReduceEffects] = useState(() => {
-    try {
-      const saved = localStorage.getItem("kopli.reduce-effects");
-      return saved === null ? window.matchMedia("(prefers-reduced-motion: reduce)").matches : saved === "true";
-    }
-    catch (error) { console.error("Could not read motion preference:", error); return false; }
-  });
-  const [conversations, setConversations] = useState<Conversation[]>(() => getGuestHistory());
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [prompt, setPrompt] = useState("");
-  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
-  const [streaming, setStreaming] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [preferences, setPreferences] = useState<Preference>({
-    learning: true, crossChat: true, language: "English", personality: "balanced"
-  });
-  const [memoryOpen, setMemoryOpen] = useState(false);
-  const [memories, setMemories] = useState<SavedMemory[]>([]);
-  const [memoryStats, setMemoryStats] = useState({ memoryCount: 0, projectCount: 0, summaryCount: 0, feedback: {} as Record<string, number> });
-  const [memoryQuery, setMemoryQuery] = useState("");
-  const [memoryResults, setMemoryResults] = useState<Array<{ conversationId: string; title: string; summary: string | null; updatedAt: string }>>([]);
-  const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
-  const [memoryDraft, setMemoryDraft] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<Source[]>([]);
-  const [searchBusy, setSearchBusy] = useState(false);
-  const [libraryFiles, setLibraryFiles] = useState<LibraryFile[]>([]);
-  const [libraryBusy, setLibraryBusy] = useState(false);
-  const [toolType, setToolType] = useState<"image" | "docx" | "pdf" | "pptx" | "xlsx">("image");
-  const [toolPrompt, setToolPrompt] = useState("");
-  const [toolTitle, setToolTitle] = useState("");
-  const [toolResult, setToolResult] = useState<ExploreResult | null>(null);
-  const [toolPreview, setToolPreview] = useState(false);
-  const [toolStyle, setToolStyle] = useState("");
-  const [toolAspect, setToolAspect] = useState("1:1");
-  const [toolImageFormat, setToolImageFormat] = useState("png");
-  const [toolProviders, setToolProviders] = useState<{ groq?: boolean; stability?: boolean } | null>(null);
-  const [imageHistory, setImageHistory] = useState<Array<{ prompt: string; previewUrl: string; fileName: string }>>([]);
-  const [toolBusy, setToolBusy] = useState(false);
-  const [voiceActive, setVoiceActive] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
-  const [adminStatus, setAdminStatus] = useState<Record<string, boolean> | null>(null);
-  const [adminUsers, setAdminUsers] = useState<Array<{ id: string; email: string; name: string | null; role: string; createdAt: string }>>([]);
-  const [adminBusy, setAdminBusy] = useState(false);
-  const [settingsDetail, setSettingsDetail] = useState("");
-  const [settingsSearch, setSettingsSearch] = useState("");
-  const appRootRef = useRef<HTMLDivElement>(null);
-  const messagesRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const stickToBottomRef = useRef(true);
-  const scrollFrameRef = useRef<number | null>(null);
-  const parallaxFrameRef = useRef<number | null>(null);
-  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
-
-  const currentMode = useMemo(() => modes.find(item => item.id === mode) || modes[1], [mode]);
-  const ModeIcon = currentMode.icon;
-  const assistantVisualState = voiceActive ? "listening"
-    : toolBusy ? "generating"
-      : searchBusy || (streaming && mode === "research") ? "searching"
-        : streaming ? "thinking"
-          : speaking ? "speaking"
-            : /\b(?:failed|error|could not)\b/i.test(notice) ? "error"
-              : "idle";
-
-  const loadConversations = useCallback(async () => {
-    if (!user) {
-      setConversations(getGuestHistory());
-      return;
-    }
-    setConversations(await request<Conversation[]>("/api/conversations"));
-  }, [user]);
-
-  useEffect(() => {
-    let active = true;
-    request<{ authenticated: boolean; user?: User }>("/api/auth/me")
-      .then(result => { if (active && result.authenticated && result.user) setUser(result.user); })
-      .catch(error => {
-        if (active && (!(error instanceof ApiError) || error.status !== 401)) setNotice(errorText(error));
-      })
-      .finally(() => { if (active) setAuthReady(true); });
-    return () => { active = false; };
-  }, []);
-
-  useEffect(() => {
-    const viewport = window.matchMedia("(max-width: 900px)");
-    const update = () => setMobileViewport(viewport.matches);
-    viewport.addEventListener("change", update);
-    return () => viewport.removeEventListener("change", update);
-  }, []);
-
-  useEffect(() => {
-    const root = appRootRef.current;
-    if (!root || reduceEffects || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const move = (event: PointerEvent) => {
-      if (event.pointerType !== "mouse") return;
-      const bounds = root.getBoundingClientRect();
-      const x = (event.clientX - bounds.left) / bounds.width - 0.5;
-      const y = (event.clientY - bounds.top) / bounds.height - 0.5;
-      if (parallaxFrameRef.current !== null) window.cancelAnimationFrame(parallaxFrameRef.current);
-      parallaxFrameRef.current = window.requestAnimationFrame(() => {
-        root.style.setProperty("--pointer-x", `${x * 18}px`);
-        root.style.setProperty("--pointer-y", `${y * 14}px`);
-        parallaxFrameRef.current = null;
-      });
-    };
-    const reset = () => {
-      root.style.setProperty("--pointer-x", "0px");
-      root.style.setProperty("--pointer-y", "0px");
-    };
-    root.addEventListener("pointermove", move, { passive: true });
-    root.addEventListener("pointerleave", reset, { passive: true });
-    return () => {
-      root.removeEventListener("pointermove", move);
-      root.removeEventListener("pointerleave", reset);
-      if (parallaxFrameRef.current !== null) window.cancelAnimationFrame(parallaxFrameRef.current);
-    };
-  }, [reduceEffects]);
-
-  useEffect(() => {
-    if (authReady) void loadLibrary();
-  }, [authReady, user]);
-
-  useEffect(() => {
-    if (!authReady) return;
-    if (!user) {
-      setConversations(getGuestHistory());
-      return;
-    }
-    let active = true;
-    Promise.all([
-      request<Conversation[]>("/api/conversations"),
-      request<Preference>("/api/memory/preferences")
-    ]).then(([history, savedPreferences]) => {
-      if (!active) return;
-      setConversations(history);
-      setPreferences(savedPreferences);
-    }).catch(error => { if (active) setNotice(errorText(error)); });
-    return () => { active = false; };
-  }, [user, authReady]);
-
-  useEffect(() => {
-    if (!user && activeId && messages.length) {
-      setConversations(previous => {
-        const old = previous.find(item => item.id === activeId);
-        const next: Conversation = {
-          id: activeId,
-          title: old?.title || messages.find(item => item.role === "user")?.content.slice(0, 60) || "New chat",
-          mode,
-          messages,
-          archived: old?.archived || false,
-          pinned: old?.pinned || false
-        };
-        const updated = [next, ...previous.filter(item => item.id !== activeId)].slice(0, 100);
-        try { localStorage.setItem("kopli.guest-conversations.v1", JSON.stringify(updated)); }
-        catch (error) { console.error("Could not save local chat history:", error); }
-        return updated;
-      });
-    }
-  }, [user, activeId, messages, mode]);
-
-  useEffect(() => {
-    const match = window.location.pathname.match(/^\/chat\/([^/]+)/);
-    if (!match) return;
-    const routeMode = match[1] as Mode;
-    if (modes.some(option => option.id === routeMode)) {
-      setMode(routeMode);
-      setSection("Chat");
-    }
-  }, []);
-
-  useEffect(() => {
-    try { localStorage.setItem("kopli.theme", dark ? "dark" : "light"); }
-    catch (error) { console.error("Could not save theme preference:", error); }
-  }, [dark]);
-
-  useEffect(() => {
-    try { localStorage.setItem("kopli.reduce-effects", String(reduceEffects)); }
-    catch (error) { console.error("Could not save motion preference:", error); }
-  }, [reduceEffects]);
-
-  useEffect(() => {
-    const element = messagesRef.current;
-    if (!element) return;
-    if (!stickToBottomRef.current) {
-      setShowScrollToLatest(true);
-      return;
-    }
-    if (scrollFrameRef.current !== null) return;
-    scrollFrameRef.current = window.requestAnimationFrame(() => {
-      scrollFrameRef.current = null;
-      const latest = messagesRef.current;
-      if (latest && stickToBottomRef.current) latest.scrollTo({ top: latest.scrollHeight, behavior: "instant" });
-    });
-  }, [messages]);
-
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
-  }, [prompt]);
-
-  useEffect(() => () => {
-    if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
-    if ("speechSynthesis" in window) speechSynthesis.cancel();
-  }, []);
-
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(""), 6000);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-
-  useEffect(() => {
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        if (memoryOpen) setMemoryOpen(false);
-        else if (authOpen) setAuthOpen(false);
-        else if (headerModeOpen) setHeaderModeOpen(false);
-        else if (composerModeOpen) setComposerModeOpen(false);
-        else if (mobileViewport) setSidebarOpen(false);
-        return;
-      }
-      const tvBrowser = /\b(?:smart[- ]?tv|tizen|webos|android tv|google tv|googletv|aftb|bravia)\b/i.test(navigator.userAgent);
-      if (!tvBrowser && !window.matchMedia("(min-width: 1920px) and (hover: none)").matches) return;
-      const target = event.target as HTMLElement | null;
-      if (["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(target?.tagName || "")) return;
-      if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(event.key)) return;
-      const items = Array.from(document.querySelectorAll<HTMLElement>(
-        'button:not([disabled]),a[href],input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex="0"]'
-      )).filter(item => item.offsetWidth && item.offsetHeight);
-      if (!items.length) return;
-      event.preventDefault();
-      const index = items.indexOf(document.activeElement as HTMLElement);
-      const forward = event.key === "ArrowDown" || event.key === "ArrowRight";
-      items[(index + (forward ? 1 : -1) + items.length) % items.length]?.focus();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [authOpen, composerModeOpen, headerModeOpen, memoryOpen, mobileViewport]);
-
-  function newChat() {
-    abortRef.current?.abort();
-    stickToBottomRef.current = true;
-    setShowScrollToLatest(false);
-    setActiveId(null);
-    setMessages([]);
-    setPrompt("");
-    setUploadedFiles([]);
-    setStreaming(false);
-    setSection("Chat");
-    setSidebarOpen(false);
-    window.setTimeout(() => textareaRef.current?.focus(), 0);
-  }
-
-  function selectConversation(conversation: Conversation) {
-    abortRef.current?.abort();
-    stickToBottomRef.current = true;
-    setShowScrollToLatest(false);
-    setActiveId(conversation.id);
-    setMessages(conversation.messages);
-    setMode(modes.some(item => item.id === conversation.mode) ? conversation.mode as Mode : "smart");
-    setSection("Chat");
-    setSidebarOpen(false);
-  }
-
-  async function updateConversationFlag(id: string, flag: "pinned" | "archived") {
-    const item = conversations.find(conversation => conversation.id === id);
-    if (!item) return;
-    const value = !item[flag];
-    if (user) {
-      try { await request(`/api/conversations/${encodeURIComponent(id)}`, jsonRequest("PATCH", { [flag]: value })); }
-      catch (error) { setNotice(errorText(error)); return; }
-    }
-    setConversations(previous => previous.map(conversation => conversation.id === id ? { ...conversation, [flag]: value } : conversation));
-  }
-
-  async function deleteConversation(id: string) {
-    if (!window.confirm("Delete this conversation? This cannot be undone.")) return;
-    try {
-      if (user) await request(`/api/conversations/${encodeURIComponent(id)}`, { method: "DELETE" });
-      const updated = conversations.filter(item => item.id !== id);
-      setConversations(updated);
-      if (!user) localStorage.setItem("kopli.guest-conversations.v1", JSON.stringify(updated));
-      if (activeId === id) newChat();
-    } catch (error) { setNotice(errorText(error)); }
-  }
-
-  async function uploadFiles(event: ChangeEvent<HTMLInputElement>) {
-    const selected = Array.from(event.currentTarget.files || []);
-    event.currentTarget.value = "";
-    if (!selected.length) return;
-    const form = new FormData();
-    selected.slice(0, 10).forEach(file => form.append("files", file));
-    try {
-      const result = await request<{ files: UploadedFile[] }>("/api/upload", { method: "POST", body: form });
-      setUploadedFiles(previous => [...previous, ...result.files].slice(0, 10));
-    } catch (error) { setNotice(errorText(error)); }
-  }
-
-  async function sendMessage(event?: FormEvent) {
-    event?.preventDefault();
-    const text = prompt.trim();
-    if ((!text && !uploadedFiles.length) || streaming) return;
-    let submittedText = text || "Please review the attached file.";
-    const files = uploadedFiles;
-    stickToBottomRef.current = true;
-    setShowScrollToLatest(false);
-    setPrompt("");
-    setUploadedFiles([]);
-    setStreaming(true);
-    const conversationId = activeId || makeId();
-    const userMessage: ChatMessage = { id: makeId(), role: "user", content: text || "Please review the attached file.", createdAt: new Date().toISOString() };
-    const assistantId = makeId();
-    setActiveId(conversationId);
-    setSection("Chat");
-    setMessages(previous => [...previous, userMessage, { id: assistantId, role: "assistant", content: "", streaming: true }]);
-    const controller = new AbortController();
-    abortRef.current = controller;
-    try {
-      for (const file of files) {
-        if (file.mimeType.startsWith("image/")) {
-          submittedText += `\n\n[Attached image: ${file.fileName}. Image bytes are not sent to this chat endpoint.]`;
-          continue;
-        }
-        const analysis = await request<{ text: string; truncated: boolean }>(
-          `/api/files/${encodeURIComponent(file.id)}/analyze`,
-          jsonRequest("POST", { mimeType: file.mimeType })
-        );
-        submittedText += `\n\n[Text extracted from ${file.fileName}${analysis.truncated ? " (truncated)" : ""}]\n${analysis.text.slice(0, 30000)}`;
-      }
-      if (mode === "research") {
-        const result = await request<{ answer: string; sources: Source[]; conversationId?: string }>("/api/chat/search", jsonRequest("POST", { message: submittedText, conversationId }));
-        setActiveId(result.conversationId || conversationId);
-        setMessages(previous => previous.map(message => message.id === assistantId
-          ? { ...message, content: result.answer, sources: result.sources, streaming: false }
-          : message));
-      } else {
-        const response = await fetch("/api/chat", {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          signal: controller.signal,
-          body: JSON.stringify({
-            conversationId,
-            message: submittedText,
-            mode,
-            history: [...messages, userMessage].map(message => ({ role: message.role, content: message.content }))
-          })
-        });
-        if (!response.ok) {
-          const failure: unknown = await response.json().catch(() => null);
-          const message = failure && typeof failure === "object" && "error" in failure
-            ? String((failure as ApiErrorBody).error || `Request failed (${response.status}).`)
-            : failure && typeof failure === "object" && "response" in failure
-              ? String((failure as { response?: string }).response || `Request failed (${response.status}).`)
-              : `Request failed (${response.status}).`;
-          throw new ApiError(message, response.status);
-        }
-        const contentType = response.headers.get("content-type") || "";
-        if (contentType.includes("application/json")) {
-          const result = await response.json() as { response?: string; openAdmin?: boolean; error?: string };
-          if (result.error && !result.response) throw new Error(result.error);
-          setMessages(previous => previous.map(message => message.id === assistantId
-            ? { ...message, content: result.response || result.error || "Command processed.", streaming: false }
-            : message));
-          if (result.openAdmin) {
-            void loadAdmin();
-          }
-          return;
-        }
-        if (!response.body) throw new Error("The chat response stream is unavailable.");
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let done = false;
-        while (!done) {
-          const chunk = await reader.read();
-          done = chunk.done;
-          buffer += decoder.decode(chunk.value, { stream: !done });
-          let boundary = buffer.indexOf("\n\n");
-          while (boundary >= 0) {
-            const frame = buffer.slice(0, boundary);
-            buffer = buffer.slice(boundary + 2);
-            for (const line of frame.split("\n")) {
-              if (!line.startsWith("data: ")) continue;
-              const payload = line.slice(6);
-              if (payload === "[DONE]") continue;
-              const data: { text?: string; error?: string; conversationId?: string } = JSON.parse(payload);
-              if (data.conversationId) setActiveId(data.conversationId);
-              if (data.error) throw new Error(data.error);
-              if (data.text) setMessages(previous => previous.map(message => message.id === assistantId
-                ? { ...message, content: message.content + data.text, streaming: true }
-                : message));
-            }
-            boundary = buffer.indexOf("\n\n");
-          }
-        }
-        setMessages(previous => previous.map(message => message.id === assistantId ? { ...message, streaming: false } : message));
-      }
-      if (user) {
-        try { await loadConversations(); }
-        catch (error) { setNotice(`Response received, but history could not refresh: ${errorText(error)}`); }
-      }
-    } catch (error) {
-      const aborted = error instanceof DOMException && error.name === "AbortError";
-      setMessages(previous => previous.map(message => message.id === assistantId
-        ? { ...message, content: aborted ? (message.content || "Response stopped.") : `Unable to complete the request: ${errorText(error)}`, streaming: false }
-        : message));
-    } finally {
-      setStreaming(false);
-      abortRef.current = null;
-      textareaRef.current?.focus();
-    }
-  }
-
-  async function submitAuth(event: FormEvent) {
-    event.preventDefault();
-    setAuthBusy(true);
-    setAuthError("");
-    try {
-      const path = registering ? "/api/auth/register" : "/api/auth/login";
-      const result = await request<{ user: User }>(path, jsonRequest("POST", {
-        ...(registering ? { name: authName } : {}),
-        email: authEmail,
-        password: authPassword
-      }));
-      setUser(result.user);
-      setActiveId(null);
-      setMessages([]);
-      setAuthOpen(false);
-      setAuthName("");
-      setAuthEmail("");
-      setAuthPassword("");
-    } catch (error) { setAuthError(errorText(error)); }
-    finally { setAuthBusy(false); }
-  }
-
-  async function signOut() {
-    try { await request("/api/auth/logout", { method: "POST" }); }
-    catch (error) { setNotice(errorText(error)); return; }
-    setUser(null);
-    setConversations([]);
-    setActiveId(null);
-    setMessages([]);
-    setSection("Chat");
-  }
-
-  async function updatePreferences(update: Partial<Preference>) {
-    if (!user) { setAuthOpen(true); return; }
-    const previous = preferences;
-    setPreferences(current => ({ ...current, ...update }));
-    try { setPreferences(await request<Preference>("/api/memory/preferences", jsonRequest("PATCH", update))); }
-    catch (error) { setPreferences(previous); setNotice(errorText(error)); }
-  }
-
-  async function openMemoryManager() {
-    if (!user) { setAuthOpen(true); setNotice("Sign in to manage saved memory."); return; }
-    setMemoryOpen(true);
-    setMemoryResults([]);
-    try {
-      const [data, stats] = await Promise.all([
-        request<{ memories: SavedMemory[] }>("/api/memory"),
-        request<typeof memoryStats>("/api/memory/dashboard")
-      ]);
-      setMemories(data.memories);
-      setMemoryStats(stats);
-    } catch (error) { setNotice(errorText(error)); }
-  }
-
-  async function searchPastChats(event: FormEvent) {
-    event.preventDefault();
-    if (!memoryQuery.trim()) return;
-    try {
-      const result = await request<{ results: typeof memoryResults }>("/api/memory/search", jsonRequest("POST", { query: memoryQuery }));
-      setMemoryResults(result.results);
-    } catch (error) { setNotice(errorText(error)); }
-  }
-
-  async function deleteMemory(id: string) {
-    try {
-      await request(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE" });
-      setMemories(previous => previous.filter(memory => memory.id !== id));
-      setMemoryStats(previous => ({ ...previous, memoryCount: Math.max(0, previous.memoryCount - 1) }));
-    } catch (error) { setNotice(errorText(error)); }
-  }
-
-  async function editMemory(id: string) {
-    try {
-      const memory = await request<SavedMemory>(`/api/memory/${encodeURIComponent(id)}`, jsonRequest("PATCH", { content: memoryDraft }));
-      setMemories(previous => previous.map(item => item.id === id ? memory : item));
-      setEditingMemoryId(null);
-    } catch (error) { setNotice(errorText(error)); }
-  }
-
-  async function clearMemories() {
-    if (!window.confirm("Delete all saved memories and summaries?")) return;
-    try {
-      await request("/api/memory", { method: "DELETE" });
-      setMemories([]);
-      setMemoryResults([]);
-      setMemoryStats(previous => ({ ...previous, memoryCount: 0, projectCount: 0, summaryCount: 0 }));
-    } catch (error) { setNotice(errorText(error)); }
-  }
-
-  async function exportData() {
-    if (!user) { setAuthOpen(true); return; }
-    try {
-      const value = await request<unknown>("/api/memory/export");
-      const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }));
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = "kopli-memory-export.json";
-      anchor.click();
-      URL.revokeObjectURL(url);
-    } catch (error) { setNotice(errorText(error)); }
-  }
-
-  async function rateMessage(message: ChatMessage, rating: Rating) {
-    if (!user) { setNotice("Sign in to save response feedback."); return; }
-    try {
-      await request("/api/feedback", jsonRequest("POST", { conversationId: activeId, messageId: message.id, rating }));
-      setNotice("Thanks for helping improve KOPLI AI.");
-    } catch (error) { setNotice(errorText(error)); }
-  }
-
-  async function copyText(text: string) {
-    try { await navigator.clipboard.writeText(text); setNotice("Copied to clipboard."); }
-    catch (error) { setNotice(`Could not copy response: ${errorText(error)}`); }
-  }
-
-  function speak(text: string) {
-    if (!("speechSynthesis" in window)) { setNotice("Speech playback is not supported in this browser."); return; }
-    speechSynthesis.cancel();
-    setSpeaking(false);
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.onstart = () => setSpeaking(true);
-    utterance.onend = () => setSpeaking(false);
-    utterance.onerror = () => setSpeaking(false);
-    speechSynthesis.speak(utterance);
-  }
-
-  function scrollToLatest() {
-    stickToBottomRef.current = true;
-    setShowScrollToLatest(false);
-    const element = messagesRef.current;
-    if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-  }
-
-  function toggleVoice() {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
-      setVoiceActive(false);
-      return;
-    }
-    const voiceWindow = window as SpeechWindow;
-    const Recognition = voiceWindow.SpeechRecognition || voiceWindow.webkitSpeechRecognition;
-    if (!Recognition) { setNotice("Voice input is not supported in this browser."); return; }
-    const recognition = new Recognition();
-    recognition.lang = preferences.language === "tanglish" ? "en-IN" : "en-US";
-    recognition.interimResults = true;
-    recognition.onresult = result => setPrompt(Array.from(result.results).map(item => item[0]?.transcript || "").join(""));
-    recognition.onerror = event => {
-      setNotice(`Voice input failed: ${event.error}.`);
-      setVoiceActive(false);
-      recognitionRef.current = null;
-    };
-    recognition.onend = () => { setVoiceActive(false); recognitionRef.current = null; };
-    recognitionRef.current = recognition;
-    try { recognition.start(); setVoiceActive(true); }
-    catch (error) { setNotice(errorText(error)); recognitionRef.current = null; }
-  }
-
-  async function runWebSearch(event: FormEvent) {
-    event.preventDefault();
-    if (!searchQuery.trim() || searchBusy) return;
-    setSearchBusy(true);
-    try {
-      const result = await request<{ sources: Source[] }>("/api/search", jsonRequest("POST", { query: searchQuery }));
-      setSearchResults(result.sources || []);
-    } catch (error) { setNotice(errorText(error)); }
-    finally { setSearchBusy(false); }
-  }
-
-  async function loadLibrary() {
-    setLibraryBusy(true);
-    try { setLibraryFiles((await request<{ files: LibraryFile[] }>("/api/library")).files || []); }
-    catch (error) { setNotice(errorText(error)); }
-    finally { setLibraryBusy(false); }
-  }
-
-  async function removeLibraryFile(fileName: string) {
-    if (!window.confirm(`Delete ${fileName}?`)) return;
-    try {
-      await request(`/api/library/${encodeURIComponent(fileName)}`, { method: "DELETE" });
-      setLibraryFiles(previous => previous.filter(item => item.fileName !== fileName));
-    } catch (error) { setNotice(errorText(error)); }
-  }
-
-  async function generateContent(event: FormEvent) {
-    event.preventDefault();
-    if (!toolPrompt.trim() || toolBusy) return;
-    setToolBusy(true);
-    setToolResult(null);
-    try {
-      if (toolType === "image") {
-        const result = await request<{ fileName: string; mimeType: string; imageData: string }>("/api/images/generate", jsonRequest("POST", { prompt: toolPrompt, aspectRatio: toolAspect, stylePreset: toolStyle, outputFormat: toolImageFormat, includePreview: true }));
-        const previewUrl = `data:${result.mimeType};base64,${result.imageData}`;
-        setToolResult({ fileName: result.fileName, mimeType: result.mimeType, previewUrl });
-        setImageHistory(previous => [{ prompt: toolPrompt, previewUrl, fileName: result.fileName }, ...previous.filter(item => item.previewUrl !== previewUrl)].slice(0, 5));
-      } else if (toolType === "docx") {
-        const result = await request<{ title: string; content: string }>("/api/documents/draft", jsonRequest("POST", { prompt: toolPrompt, title: toolTitle || undefined }));
-        setToolResult({ title: result.title, content: result.content, fileName: `${result.title}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
-      } else {
-        const endpoint = toolType === "pdf" ? "/api/pdf/generate" : toolType === "pptx" ? "/api/presentations/generate" : "/api/documents/generate";
-        const result = await request<{ fileName: string; mimeType: string; content: string }>(endpoint, jsonRequest("POST", { content: toolPrompt, title: toolTitle || undefined, format: toolType, includeContent: true }));
-        setToolResult({ fileName: result.fileName, mimeType: result.mimeType, previewUrl: `data:${result.mimeType};base64,${result.content}` });
-      }
-    } catch (error) { setNotice(errorText(error)); }
-    finally { setToolBusy(false); }
-  }
-
-  async function exportDocument(format: "docx" | "pdf" | "txt") {
-    if (!toolResult?.content || !toolResult.title) return;
-    try {
-      const response = await fetch("/api/documents/export", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: toolResult.title, content: toolResult.content, format }) });
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new ApiError(body.error || `Export failed (${response.status}).`, response.status);
-      }
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `${toolResult.title.replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "KOPLI_AI_Document"}.${format}`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (error) { setNotice(errorText(error)); }
-  }
-
-  useEffect(() => {
-    if (section !== "Explore") return;
-    let active = true;
-    void request<{ groq?: boolean; stability?: boolean }>("/api/status").then(status => { if (active) setToolProviders(status); }).catch(error => { if (active) setNotice(errorText(error)); });
-    return () => { active = false; };
-  }, [section]);
-
-  async function loadAdmin() {
-    setSection("Admin");
-    setAdminBusy(true);
-    try {
-      const [statusRes, usersRes] = await Promise.all([
-        request<{ providerStatus: Record<string, boolean> }>("/api/admin/status"),
-        request<{ users: typeof adminUsers }>("/api/admin/users").catch(() => ({ users: [] }))
-      ]);
-      setAdminStatus(statusRes.providerStatus);
-      setAdminUsers(usersRes.users || []);
-    }
-    catch (error) { setNotice(errorText(error)); }
-    finally { setAdminBusy(false); }
-  }
-
-  function chooseSection(next: Section) {
-    setSection(next);
-    setSidebarOpen(false);
-    setSettingsDetail("");
-    if (next === "Library") void loadLibrary();
-  }
-
-  const currentHistory = conversations.filter(item => !item.archived);
-  const settingsLinks = ["Appearance", "Personalization", "Data & memory", "Account", "About KOPLI AI"]
-    .filter(item => item.toLowerCase().includes(settingsSearch.toLowerCase()));
-
-  return (
-    <div ref={appRootRef} className={`app${dark ? " dark" : ""}${reduceEffects ? " reduce-effects" : ""}`}>
-      {mobileViewport && sidebarOpen && <button className="sidebar-overlay" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
-      <aside className={`sidebar${sidebarOpen ? " open" : ""}`} aria-label="Main navigation">
-        <div className="brand"><span className="brand-mark"><img className="hen-image hen-small" src="/logo.png" alt="" /></span><strong>KOPLI <b>AI</b></strong></div>
-        <button className="new-chat" aria-label="New chat" title="New chat" onClick={newChat}><Plus size={18} aria-hidden="true" /><span>New chat</span></button>
-        <nav className="nav" aria-label="Workspace">
-          {navigation.map(item => {
-            const Icon = item.icon;
-            const label = ({Chat:"AI Assistant",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[item.label];
-            return <button key={item.label} className={section === item.label ? "active" : ""} aria-label={label} title={label} aria-current={section === item.label ? "page" : undefined} onClick={() => chooseSection(item.label)}><Icon size={18} aria-hidden="true" /><span>{label}</span></button>;
-          })}
-          {user?.role === "owner" && <button className={section === "Admin" ? "active" : ""} aria-label="Admin" title="Admin" onClick={() => void loadAdmin()}><Shield size={18} aria-hidden="true" /><span>Admin</span></button>}
-        </nav>
-        <button className="sidebar-about" aria-label="About KOPLI AI" title="About KOPLI AI" onClick={() => { setSection("Settings"); setSettingsDetail("About KOPLI AI"); setSidebarOpen(false); }}><CircleHelp size={17} aria-hidden="true" /><span>About KOPLI AI</span></button>
-        <div className="history">
-          <div className="history-title">Recent chats</div>
-          {currentHistory.length ? currentHistory.map(conversation => (
-            <div className={`history-row${activeId === conversation.id ? " active" : ""}`} key={conversation.id}>
-              <button className="history-open" title={conversation.title} onClick={() => selectConversation(conversation)}><span>{conversation.pinned ? "ðŸ“Œ " : ""}{conversation.title}</span></button>
-              <details className="history-menu"><summary aria-label={`Actions for ${conversation.title}`}><MoreHorizontal size={17} /></summary>
-                <div className="history-actions">
-                  <button onClick={() => void updateConversationFlag(conversation.id, "pinned")}>{conversation.pinned ? "Unpin" : "Pin"}</button>
-                  {user && <button onClick={() => void updateConversationFlag(conversation.id, "archived")}>Archive</button>}
-                  <button onClick={() => void deleteConversation(conversation.id)}>Delete</button>
-                </div>
-              </details>
-            </div>
-          )) : <div className="empty-history">{authReady ? "Your conversations will appear here." : "Loading historyâ€¦"}</div>}
-        </div>
-        <button className="profile" onClick={() => user ? chooseSection("Settings") : setAuthOpen(true)}>
-          <span className="avatar">{user ? (user.name || user.email).slice(0, 2).toUpperCase() : <UserRound size={16} />}</span>
-          <span><strong>{user?.name || "Guest"}</strong><span>{user?.email || "Sign in to sync memory"}</span></span>
-          {user ? <Settings size={16} /> : <LogIn size={16} />}
-        </button>
-      </aside>
-
-      <main className="main">
-        <header className="topbar">
-          <button className={`icon-button ${mobileViewport ? "mobile-menu" : "sidebar-toggle"}`} aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"} onClick={() => setSidebarOpen(value => !value)}><Menu size={19} /></button>
-          <div className="header-context"><span>Workspace</span><strong>{({Chat:"My Conversations",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[section]}</strong></div>
-          <div className="top-actions">
-            <button className="icon-button" aria-label="Search" title="Search" onClick={() => chooseSection("Search")}><Search size={17} /></button>
-            <button className="icon-button notification-button" aria-label="Notifications" title="Notifications" onClick={() => setNotice("You are all caught up.")}><Bell size={17} /><span /></button>
-            <button className="icon-button" aria-label={dark ? "Use light theme" : "Use dark theme"} title="Toggle theme" onClick={() => setDark(value => !value)}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
-            <button className="icon-button" aria-label="Help and support" title="Help and support" onClick={() => chooseSection("Settings")}><CircleHelp size={17} /></button>
-            <div className="profile-menu-wrap"><button className="header-avatar" aria-label="Open profile menu" aria-expanded={profileMenuOpen} onClick={() => setProfileMenuOpen(value => !value)}>{user ? (user.name || user.email).slice(0,2).toUpperCase() : <UserRound size={17} />}</button>
-              {profileMenuOpen && <div className="profile-dropdown"><button onClick={() => user ? chooseSection("Settings") : setAuthOpen(true)}><UserRound size={16}/><span>{user ? "Account settings" : "Sign in"}</span></button><button onClick={() => chooseSection("Settings")}><Settings size={16}/><span>Preferences</span></button></div>}</div>
-          </div>
-        </header>
-
-                {section === "Chat" && <>
-                    <section className="chat-shell" aria-label="Chat">
-            {messages.length === 0 ? <div className="welcome">
-              <div className="welcome-hen" data-state={assistantVisualState}><img className="hen-image" src="/logo.png" alt="KOPLI AI" /></div>
-              <h1>What can I help you with?</h1><p>Think, create, explore and discover with KOPLI AI.</p>
-              <div className="suggestions">
-                {["Explain a topic simply", "Help me plan a project", "Write or improve code", "Research a topic"].map((item, index) => <button key={item} onClick={() => { setPrompt(item); textareaRef.current?.focus(); }}><span>{item}</span>{index === 2 ? <Code2 size={17} /> : index === 3 ? <Globe2 size={17} /> : <Sparkles size={17} />}</button>)}
-              </div>
-            </div> : <div className="messages" ref={messagesRef} aria-live="polite" onScroll={event => {
-              const element = event.currentTarget;
-              const isAtBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 120;
-              stickToBottomRef.current = isAtBottom;
-              if (isAtBottom) setShowScrollToLatest(false);
-            }}>
-              {messages.map(message => <MessageView key={message.id} message={message} onFeedback={(item, rating) => void rateMessage(item, rating)} onCopy={text => void copyText(text)} onSpeak={speak} />)}
-            </div>}
-            {showScrollToLatest && messages.length > 0 && <button className="scroll-to-latest" type="button" onClick={scrollToLatest} aria-label="Scroll to latest message">
-              <ChevronDown size={16} aria-hidden="true" /><span>Latest Message</span><i aria-label="New messages" />
-            </button>}
-            <div className="composer-wrap">
-              {uploadedFiles.length > 0 && <div className="attachments" aria-label="Attached files">
-                {uploadedFiles.map(file => <div key={file.id}><FileText size={14} /><span title={file.fileName}>{file.fileName}</span><button aria-label={`Remove ${file.fileName}`} onClick={() => setUploadedFiles(previous => previous.filter(item => item.id !== file.id))}><X size={14} /></button></div>)}
-              </div>}
-              <form className="composer" onSubmit={event => void sendMessage(event)}>
-                <textarea ref={textareaRef} className="composer-input" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
-                  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); }
-                }} placeholder="Message KOPLI AIâ€¦" aria-label="Message KOPLI AI" rows={2} disabled={streaming} />
-                <div className="composer-toolbar">
-                  <div className="composer-toolbar-left">
-                    <input ref={fileInputRef} type="file" multiple hidden onChange={event => void uploadFiles(event)} aria-label="Choose files" />
-                    <button className="composer-button" type="button" aria-label="Attach files" title="Attach files" onClick={() => fileInputRef.current?.click()}><Paperclip size={19} /></button>
-                    <button className={`composer-button${mode === "research" ? " search-on" : ""}`} type="button" aria-label="Toggle research mode" title="Research mode" onClick={() => setMode(value => value === "research" ? "smart" : "research")}><Globe2 size={18} /></button>
-                  </div>
-                  <div className="composer-toolbar-right">
-                    <div className="composer-mode-wrap">
-                      <button className="composer-mode" type="button" aria-expanded={composerModeOpen} onClick={() => setComposerModeOpen(value => !value)}><ModeIcon size={16} /><span>{currentMode.label}</span><ChevronDown size={14} /></button>
-                      {composerModeOpen && <div className="composer-mode-menu">{modes.map(option => {
-                        const Icon = option.icon;
-                        return <button key={option.id} type="button" className={mode === option.id ? "selected" : ""} onClick={() => { setMode(option.id); setComposerModeOpen(false); }}><Icon size={16} /><div><strong>{option.label}</strong><span>{option.detail}</span></div></button>;
-                      })}</div>}
-                    </div>
-                    <button className={`composer-button${voiceActive ? " selected" : ""}`} type="button" aria-label={voiceActive ? "Stop voice input" : "Start voice input"} title="Voice input" onClick={toggleVoice}><Mic size={18} /></button>
-                    {streaming
-                      ? <button className="send-button" type="button" aria-label="Stop response" onClick={() => abortRef.current?.abort()}><X size={18} /></button>
-                      : <button className="send-button" type="submit" disabled={!prompt.trim() && !uploadedFiles.length} aria-label="Send message"><Send size={18} /></button>}
-                  </div>
-                </div>
-              </form>
-              <div className="disclaimer">KOPLI AI can make mistakes. Check important information.</div>
-            </div>
-          </section>
-        </>}
-
-        {section === "Search" && <section className="page">
-          <header className="page-heading"><h1>Search the web</h1><p>Find current sources and explore useful information.</p></header>
-          <form onSubmit={event => void runWebSearch(event)} role="search">
-            <input className="chat-search" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Search a topicâ€¦" aria-label="Search the web" />
-            <button className="auth-submit" type="submit" disabled={searchBusy || !searchQuery.trim()}>{searchBusy ? "Searchingâ€¦" : "Search"}</button>
-          </form>
-          <div className="search-results">{searchResults.map((item, index) => <a className="search-results-card" key={`${item.url}-${index}`} href={item.url} target="_blank" rel="noreferrer"><strong>{item.title || item.url}</strong><span>{item.url}</span><p>{item.content}</p></a>)}</div>
-        </section>}
-
-        {section === "Explore" && <section className="page">
-          <header className="page-heading"><h1>Explore</h1><p>Create useful content with KOPLI AI tools.</p></header>
-          <div className="tool-grid explore-tool-grid">
-            {([
-              ["image", ImageIcon, "Image generation", "Create an image from a text description.", "/tools/explore-image.svg"],
-              ["docx", FileText, "Documents", "Draft, edit, preview, and export your document.", "/tools/explore-documents.svg"],
-              ["pdf", FileText, "PDF reports", "Generate a polished, printable report.", "/tools/explore-pdf.svg"],
-              ["pptx", Library, "Presentations", "Generate a professional slide deck.", "/tools/explore-presentations.svg"],
-              ["xlsx", Library, "Spreadsheets", "Turn a request into a structured workbook.", "/tools/explore-spreadsheet.svg"]
-            ] as const).map(([type, Icon, title, description, image]) => <button type="button" className={`tool-card explore-tool-card${toolType === type ? " selected" : ""}`} key={type} aria-pressed={toolType === type} onClick={() => { setToolType(type); setToolResult(null); }}>
-              <img className="explore-tool-image" src={image} alt="" loading="lazy" />
-              <span className="tool-icon"><Icon size={19} /></span><h3>{title}</h3><p>{description}</p><span className="explore-open-label">Open tool <ChevronRight size={14} /></span>
-            </button>)}
-          </div>
-          <div className="settings-card modern explore-workspace" aria-label={`${toolType} tool`}>
-            {!user && <div className="explore-provider-note"><strong>Sign in to create and download files</strong><span>Generated files are private to your account.</span><button type="button" onClick={() => setAuthOpen(true)}>Sign in</button></div>}
-            {user && toolProviders && ((toolType === "image" && !toolProviders.stability) || (toolType !== "image" && !toolProviders.groq)) && <div className="explore-provider-note" role="status">
-              <strong>{toolType === "image" ? "Image generation needs provider setup" : "AI file generation needs provider setup"}</strong>
-              <span>{toolType === "image" ? "Configure STABILITY_API_KEY in the existing service to enable image generation." : "Configure GROQ_API_KEY in the existing service to enable document generation."}</span>
-            </div>}
-            <div className="explore-form-heading"><div><span className="eyebrow">KOPLI AI TOOL</span><h2>{({image:"Image generation",docx:"Documents",pdf:"PDF reports",pptx:"Presentations",xlsx:"Spreadsheets"})[toolType]}</h2></div>{toolResult && <button type="button" className="explore-text-action" onClick={() => { setToolResult(null); setToolPreview(false); }}>Clear result</button>}</div>
-            <form onSubmit={event => void generateContent(event)}>
-              {toolType !== "image" && <label className="explore-field"><span>Title <small>(optional)</small></span><input className="chat-search" value={toolTitle} onChange={event => setToolTitle(event.target.value)} maxLength={160} placeholder="Give your file a title" /></label>}
-              {toolType === "image" && <div className="explore-image-options">
-                <label className="explore-field"><span>Style</span><select className="chat-search" value={toolStyle} onChange={event => setToolStyle(event.target.value)}><option value="">Automatic</option><option value="photographic">Photographic</option><option value="digital-art">Digital art</option><option value="3d-model">3D</option><option value="cinematic">Cinematic</option><option value="anime">Anime</option><option value="isometric">Isometric</option><option value="line-art">Line art</option></select></label>
-                <label className="explore-field"><span>Aspect ratio</span><select className="chat-search" value={toolAspect} onChange={event => setToolAspect(event.target.value)}>{["1:1","16:9","3:2","4:5","2:3","9:16","21:9","5:4"].map(value => <option key={value}>{value}</option>)}</select></label>
-                <label className="explore-field"><span>File type</span><select className="chat-search" value={toolImageFormat} onChange={event => setToolImageFormat(event.target.value)}><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></label>
-              </div>}
-              <label className="explore-field" htmlFor="tool-prompt"><span>{toolType === "image" ? "Describe the image" : "What should KOPLI AI create?"}</span>
-                <textarea id="tool-prompt" className="chat-search" value={toolPrompt} onChange={event => setToolPrompt(event.target.value)} maxLength={10000} placeholder={toolType === "image" ? "Describe the subject, composition, lighting, and moodâ€¦" : "Describe the content, audience, key points, and any details to includeâ€¦"} />
-              </label>
-              <div className="explore-form-footer"><span>{toolPrompt.length.toLocaleString()} / 10,000</span><button className="auth-submit" type="submit" disabled={!user || toolBusy || !toolPrompt.trim() || (toolProviders ? toolType === "image" ? !toolProviders.stability : !toolProviders.groq : false)}>{toolBusy ? "Creatingâ€¦" : toolType === "image" && toolResult ? "Regenerate image" : `Create ${toolType.toUpperCase()}`}</button></div>
-            </form>
-            {toolBusy && <p className="explore-status" role="status">KOPLI AI is creating your {toolType === "image" ? "image" : toolType === "docx" ? "document draft" : toolType.toUpperCase()}â€¦</p>}
-            {toolResult && <div className="generated-image-card explore-result">
-              {toolType === "image" && toolResult.previewUrl && <img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || "AI generated image"} />}
-              {toolType === "pdf" && toolResult.previewUrl && <iframe className="explore-pdf-preview" src={toolResult.previewUrl} title={toolResult.fileName} />}
-              {toolType === "docx" && toolResult.content !== undefined && <>
-                <div className="explore-result-tabs"><button type="button" className={!toolPreview ? "active" : ""} onClick={() => setToolPreview(false)}>Edit</button><button type="button" className={toolPreview ? "active" : ""} onClick={() => setToolPreview(true)}>Preview</button></div>
-                {toolPreview ? <div className="explore-document-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{toolResult.content}</ReactMarkdown></div> : <textarea aria-label="Edit document content" className="explore-document-editor" value={toolResult.content} onChange={event => setToolResult(previous => previous ? { ...previous, content: event.target.value } : previous)} />}
-                <div className="explore-export-actions">{(["docx","pdf","txt"] as const).map(format => <button key={format} type="button" onClick={() => void exportDocument(format)}><Download size={15} /> Download {format.toUpperCase()}</button>)}<button type="button" onClick={() => void copyText(toolResult.content || "")}><Copy size={15} /> Copy</button></div>
-              </>}
-              <div className="generated-image-toolbar"><span>{toolResult.fileName}</span><div>{toolType !== "docx" && toolResult.previewUrl && <a href={toolResult.previewUrl} download={toolResult.fileName} aria-label="Download generated file"><Download size={17} /> Download</a>}</div></div>
-            </div>}
-            {toolType === "image" && imageHistory.length > 0 && <div className="explore-history"><strong>Recent images</strong><div>{imageHistory.map(item => <button key={item.fileName} type="button" title={item.prompt} onClick={() => { setToolResult({ fileName: item.fileName, previewUrl: item.previewUrl }); setToolPrompt(item.prompt); }}><img src={item.previewUrl} alt="" /><span>{item.prompt}</span></button>)}</div></div>}
-          </div>
-        </section>}
-
-        {section === "Library" && <section className="page">
-          <header className="page-heading"><h1>Library</h1><p>Your uploaded and generated files.</p></header>
-          {libraryBusy ? <p role="status">Loading your filesâ€¦</p> : libraryFiles.length ? <div className="tool-grid">
-            {libraryFiles.map(file => <article className="tool-card library-card" key={file.fileName}>
-              <a href={file.url} target="_blank" rel="noreferrer"><span className="tool-icon"><FileText size={20} /></span><h3>{file.fileName}</h3><p>{file.type} Â· {(file.size / 1024).toFixed(1)} KB</p></a>
-              <div className="library-actions"><a href={file.url} download={file.fileName}>Download</a><button onClick={() => void removeLibraryFile(file.fileName)}>Delete</button></div>
-            </article>)}
-          </div> : <div className="library-empty"><Library size={30} /><h3>Your library is empty</h3><p>Generated and uploaded files will appear here.</p></div>}
-        </section>}
-
-        {section === "Settings" && <section className="settings-page-modern">
-          <header className="settings-header-modern"><button className="settings-back" aria-label="Back to chat" onClick={() => chooseSection("Chat")}><ArrowLeft size={19} /></button><h1>Settings</h1><Settings size={19} /></header>
-          {!settingsDetail ? <div className="settings-mobile-body">
-            <button className="settings-customize" onClick={() => setSettingsDetail("Personalization")}><span className="settings-gift"><Sparkles size={19} /></span><div><strong>Personalization</strong><span>Customize how KOPLI AI works for you</span></div><ChevronRight size={18} /></button>
-            <div className="settings-main-card">
-              <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("Appearance")}><Sun size={18} /><span>Appearance</span><ChevronRight size={17} /></button>
-              <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("Data & memory")}><Brain size={18} /><span>Data &amp; memory</span><ChevronRight size={17} /></button>
-              <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("About KOPLI AI")}><CircleHelp size={18} /><span>About KOPLI AI</span><ChevronRight size={17} /></button>
-              <button className="settings-neutral-row-button" onClick={() => user ? void signOut() : setAuthOpen(true)}>{user ? <LogOut size={18} /> : <LogIn size={18} />}<span>{user ? "Sign out" : "Sign in or create account"}</span><ChevronRight size={17} /></button>
-              {user?.role === "owner" && <button className="settings-neutral-row-button" onClick={() => void loadAdmin()}><Shield size={18} /><span>Admin status</span><ChevronRight size={17} /></button>}
-            </div>
-          </div> : <div className="settings-detail">
-            <button className="settings-detail-back" onClick={() => setSettingsDetail("")}><ChevronLeft size={17} /> Settings</button><h2>{settingsDetail}</h2>
-            {settingsDetail === "Appearance" && <div className="settings-card-neutral">
-              <div className="settings-neutral-row"><div><strong>Theme</strong><span>Choose light or dark appearance</span></div><button className={`switch ${dark ? "toggle-active" : ""}`} aria-label={dark ? "Use light theme" : "Use dark theme"} aria-pressed={dark} onClick={() => setDark(value => !value)}><span className={dark ? "on" : ""} /></button></div>
-              <div className="settings-neutral-row"><div><strong>Reduce motion</strong><span>Turn off orb and card animations</span></div><button className={`switch ${reduceEffects ? "toggle-active" : ""}`} aria-label="Toggle reduced visual effects" aria-pressed={reduceEffects} onClick={() => setReduceEffects(value => !value)}><span className={reduceEffects ? "on" : ""} /></button></div>
-            </div>}
-            {settingsDetail === "Personalization" && <div className="settings-card-neutral">
-              <div className="settings-neutral-row"><div><strong>Improve responses</strong><span>Remember corrections and preferences for this account</span></div><button className={`switch ${preferences.learning ? "toggle-active" : ""}`} aria-label="Toggle response personalization" aria-pressed={preferences.learning} onClick={() => void updatePreferences({ learning: !preferences.learning })}><span className={preferences.learning ? "on" : ""} /></button></div>
-              <div className="settings-neutral-row"><div><strong>Use past conversations</strong><span>Allow KOPLI AI to recall relevant chats when asked</span></div><button className={`switch ${preferences.crossChat ? "toggle-active" : ""}`} aria-label="Toggle cross-chat memory" aria-pressed={preferences.crossChat} onClick={() => void updatePreferences({ crossChat: !preferences.crossChat })}><span className={preferences.crossChat ? "on" : ""} /></button></div>
-            </div>}
-            {settingsDetail === "Data & memory" && <div className="settings-card-neutral">
-              <div className="settings-neutral-row"><div><strong>Saved memory</strong><span>Review or remove saved preferences and summaries</span></div><button className="settings-action" onClick={() => void openMemoryManager()}>Manage</button></div>
-              <div className="settings-neutral-row"><div><strong>Export my data</strong><span>Download memory, preferences, and conversations</span></div><button className="settings-action" onClick={() => void exportData()} disabled={!user}>Export</button></div>
-            </div>}
-            {settingsDetail === "Account" && <div className="settings-card-neutral"><div className="settings-neutral-row"><div><strong>{user?.email || "Guest session"}</strong><span>{user ? "Your account is signed in" : "Sign in to sync your history"}</span></div><button className="settings-action" onClick={() => user ? void signOut() : setAuthOpen(true)}>{user ? "Sign out" : "Sign in"}</button></div></div>}
-            {settingsDetail === "About KOPLI AI" && <div className="settings-card-neutral about-brand"><span className="brand-mark"><img src="/logo.png" alt="KOPLI AI" /></span><div><strong>KOPLI AI</strong><span>Your personal AI workspace</span></div></div>}
-          </div>}
-          <div className="settings-search-wrap"><Search size={17} /><input value={settingsSearch} onChange={event => setSettingsSearch(event.target.value)} placeholder="Search settings" aria-label="Search settings" />
-            {settingsSearch && <div className="settings-search-results" role="listbox">{settingsLinks.map(item => <button key={item} onClick={() => { setSettingsDetail(item); setSettingsSearch(""); }}>{item}</button>)}{!settingsLinks.length && <span>No matching settings.</span>}</div>}
-          </div>
-        </section>}
-
-        {section === "Admin" && <section className="page"><header className="page-heading"><h1>Admin dashboard</h1><p>Provider configuration and user management for this deployment.</p></header>
-          {adminBusy ? <p role="status">Checking admin statusâ€¦</p> : adminStatus ? <>
-            <div className="settings-card">
-              <h2 style={{ fontSize: "1.1rem", marginBottom: 12 }}>Provider Status</h2>
-              {Object.entries(adminStatus).map(([key, enabled]) => <div className="settings-row" key={key}><div><strong>{key.toUpperCase()}</strong><span>{enabled ? "Configured" : "Not configured"}</span></div><span>{enabled ? "Ready" : "Unavailable"}</span></div>)}
-            </div>
-            {adminUsers.length > 0 && <div className="settings-card" style={{ marginTop: 16 }}>
-              <h2 style={{ fontSize: "1.1rem", marginBottom: 12 }}>Registered Users ({adminUsers.length})</h2>
-              {adminUsers.map(u => <div className="settings-row" key={u.id}><div><strong>{u.name ? `${u.name} (${u.email})` : u.email}</strong><span>Role: {u.role}</span></div><span>{new Date(u.createdAt).toLocaleDateString()}</span></div>)}
-            </div>}
-          </> : <p>Admin status is unavailable.</p>}
-        </section>}
-      </main>
-
-      {notice && <div className="feedback-toast" role="status">{notice}</div>}
-
-      {authOpen && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setAuthOpen(false); }}>
-        <section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
-          <button className="dialog-close" aria-label="Close sign in" onClick={() => setAuthOpen(false)}><X size={19} /></button>
-          <div className="auth-brand">KOPLI <span>AI</span></div><h1 id="auth-title">{registering ? "Create your account" : "Welcome back"}</h1>
-          <p>Sign in to sync conversations and manage private memory.</p>
-          <form onSubmit={event => void submitAuth(event)}>
-            {registering && <label>Name<input autoComplete="name" value={authName} onChange={event => setAuthName(event.target.value)} required maxLength={100} /></label>}
-            <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
-            <label>Password<input type="password" autoComplete={registering ? "new-password" : "current-password"} value={authPassword} onChange={event => setAuthPassword(event.target.value)} required minLength={registering ? 12 : 1} /></label>
-            {authError && <p className="auth-error" role="alert">{authError}</p>}
-            <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Please waitâ€¦" : registering ? "Create account" : "Sign in"}</button>
-          </form>
-          <button className="auth-mode-toggle" onClick={() => { setRegistering(value => !value); setAuthError(""); }}>{registering ? "Already have an account? Sign in" : "New to KOPLI AI? Create an account"}</button>
-          <p className="oauth-note">Email and password sign-in are available. Google and GitHub sign-in are not configured.</p>
-        </section>
-      </div>}
-
-      {memoryOpen && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setMemoryOpen(false); }}>
-        <section className="memory-dialog" role="dialog" aria-modal="true" aria-labelledby="memory-title">
-          <button className="dialog-close" aria-label="Close memory manager" onClick={() => setMemoryOpen(false)}><X size={19} /></button>
-          <header><h2 id="memory-title">Memory &amp; learning</h2><p>Review and control information used to personalize your conversations.</p></header>
-          <div className="learning-dashboard">
-            <div><strong>{memoryStats.memoryCount}</strong><span>Saved memories</span></div><div><strong>{memoryStats.projectCount}</strong><span>Project memories</span></div>
-            <div><strong>{memoryStats.summaryCount}</strong><span>Chat summaries</span></div><div><strong>{memoryStats.feedback.helpful || 0}</strong><span>Helpful ratings</span></div>
-          </div>
-          <form className="memory-search" onSubmit={event => void searchPastChats(event)}><input className="chat-search" value={memoryQuery} onChange={event => setMemoryQuery(event.target.value)} placeholder="Search past conversationsâ€¦" aria-label="Search past conversations" /><button className="settings-action" type="submit">Search</button></form>
-          {!!memoryResults.length && <div className="search-results">{memoryResults.map(result => <button key={result.conversationId} onClick={() => {
-            const conversation = conversations.find(item => item.id === result.conversationId);
-            if (conversation) { selectConversation(conversation); setMemoryOpen(false); }
-            else setNotice("That conversation is not in the currently loaded history.");
-          }}><strong>{result.title}</strong><span>{result.summary || new Date(result.updatedAt).toLocaleString()}</span></button>)}</div>}
-          {memories.length ? <div className="memory-list">{memories.map(memory => <article className="memory-item" key={memory.id}>
-            <div><span className="memory-category">{memory.category}</span>{editingMemoryId === memory.id
-              ? <input className="chat-search" value={memoryDraft} onChange={event => setMemoryDraft(event.target.value)} aria-label="Edit saved memory" maxLength={500} />
-              : <p>{memory.content}</p>}<time dateTime={memory.updatedAt}>{new Date(memory.updatedAt).toLocaleDateString()}</time></div>
-            <div className="memory-item-actions">{editingMemoryId === memory.id
-              ? <><button onClick={() => void editMemory(memory.id)}>Save</button><button onClick={() => setEditingMemoryId(null)}>Cancel</button></>
-              : <><button onClick={() => { setEditingMemoryId(memory.id); setMemoryDraft(memory.content); }}>Edit</button><button className="danger" aria-label="Delete memory" onClick={() => void deleteMemory(memory.id)}><Trash2 size={15} /></button></>}</div>
-          </article>)}</div> : <div className="memory-empty">No saved memories yet. Personalization only uses information from your signed-in conversations.</div>}
-          <div className="memory-footer-actions"><button className="settings-action" onClick={() => void exportData()}><Download size={15} /> Export data</button><button className="settings-action danger" onClick={() => void clearMemories()}><Trash2 size={15} /> Clear saved memory</button></div>
-        </section>
-      </div>}
-    </div>
-  );
-}
-
-const rootElement = document.getElementById("root");
-if (!rootElement) throw new Error("KOPLI AI root element was not found.");
-createRoot(rootElement).render(<App />);
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éíÛŽôå:-jZ.¶›­–)Þ³]Ú[\ÜÈ\ÙPØ[˜XÚË\ÙQY™™XÝ\ÙSY[[Ë\ÙT™Y‹\ÙTÝ]K\HÚ[™ÙQ]™[\H›Ü›Q]™[\HÙ^X›Ø\™]™[Hœ›ÛHœ™XXÝŽÃBš[\ÜÈÜ™X]T›ÛÝHœ›ÛHœ™XXÝYÛKØÛY[ŽÃBš[\Ü™XXÝX\šÙÝÛˆœ›ÛHœ™XXÝ[X\šÙÝÛˆŽÃBš[\Ü™[X\šÑÙ›Hœ›ÛHœ™[X\šËYÙ›HŽÃBš[\ÜÃBˆ\œ›ÝÓY™[œ˜Z[‹ÚXÚËÚ]œ›Û‘ÝÛ‹Ú]œ›Û“YÚ]œ›Û”šYÚÛÙL‹BˆÛÜKÝÛ›ØY^YKš[U^ÛØ™L‹[XYÙH\È[XYÙRXÛÛ‹Xœ˜\žKBˆÙÒ[‹ÙÓÝ]Y[KZXË[ÛÛ‹Ú\˜ÛR[[Ü™RÜš^›Û[\\˜Û\\ËÙX\˜ÚBˆÙ[™Ù][™ÜËÚY[Ü\šÛ\ËÝ[‹[XœÑÝÛ‹[XœÕ\˜\Ú‹Bˆ\Ù\”›Ý[™›Û[YL‹˜\BŸHœ›ÛH›XÚYK\™XXÝŽÃBš[\Ü‹‹ÜÝ[\Ë˜ÜÜÈŽÃBš[\Ü‹‹Ý[YK˜ÜÜÈŽÃBš[\Ü‹‹ØÚ]][YK˜ÜÜÈŽÃBƒB\H[ÙHH™˜\ÝˆœÛX\ˆœ™X\ÛÛš[™Èˆ˜ÛÙ[™Èˆœ™\ÙX\˜Úˆš\Ú[ÛˆŽÃB\HÙXÝ[ÛˆHÚ]ˆ”ÙX\˜Úˆ‘^Ü™Hˆ“Xœ˜\žHˆ”Ù][™ÜÈˆYZ[ˆŽÃB\H˜][™ÈHš[[ˆ››ÝÚ[[ŽÃB\HXÛÛÛÛ\Û™[H\[ÙˆÜ\šÛ\ÎÃBƒBš[\™˜XÙH\Ù\ˆÃBˆ[XZ[ˆÝš[™ÎÃBˆ˜[YNˆÝš[™È[ÃBˆ›ÛNˆ\Ù\ˆˆ›ÝÛ™\ˆŽÃBŸCBƒBš[\™˜XÙHÛÝ\˜ÙHÃBˆ]OÎˆÝš[™ÎÃBˆ\›ˆÝš[™ÎÃBˆÛÛ[ÎˆÝš[™ÎÃBŸCBƒBš[\™˜XÙHÚ]Y\ÜØYÙHÃBˆYˆÝš[™ÎÃBˆ›ÛNˆ\Ù\ˆˆ˜\ÜÚ\Ý[ŽÃBˆÛÛ[ˆÝš[™ÎÃBˆÜ™X]Y]ÎˆÝš[™ÎÃBˆÛÝ\˜Ù\ÏÎˆÛÝ\˜ÙV×NÃBˆÝ™X[Z[™ÏÎˆ›ÛÛX[ŽÃBŸCBƒBš[\™˜XÙHÛÛ™\œØ][ÛˆÃBˆYˆÝš[™ÎÃBˆ]NˆÝš[™ÎÃBˆ[ÙNˆÝš[™ÎÃBˆ\˜Ú]™YÎˆ›ÛÛX[ŽÃBˆ[›™YÎˆ›ÛÛX[ŽÃBˆY\ÜØYÙ\ÎˆÚ]Y\ÜØYÙV×NÃBŸCBƒBš[\™˜XÙH™Y™\™[˜ÙHÃBˆX\›š[™Îˆ›ÛÛX[ŽÃBˆÜ›ÜÜÐÚ]ˆ›ÛÛX[ŽÃBˆ[™ÝXYÙNˆÝš[™ÎÃBˆ\œÛÛ˜[]NˆÝš[™ÎÃBŸCBƒBš[\™˜XÙHØ]™YY[[ÜžHÃBˆYˆÝš[™ÎÃBˆØ]YÛÜžNˆÝš[™ÎÃBˆÛÛ[ˆÝš[™ÎÃBˆ\]Y]ˆÝš[™ÎÃBŸCBƒBš[\™˜XÙHXœ˜\žQš[HÃBˆš[S˜[YNˆÝš[™ÎÃBˆÚ^™Nˆ[X™\ŽÃBˆ\NˆÝš[™ÎÃBˆ\›ˆÝš[™ÎÃBˆ\]Y]ˆÝš[™ÎÃBŸCBƒBš[\™˜XÙH^Ü™T™\Ý[ÃBˆš[S˜[YNˆÝš[™ÎÃBˆZ[YU\OÎˆÝš[™ÎÃBˆ™]šY]Õ\›ÎˆÝš[™ÎÃBˆÛÛ[ÎˆÝš[™ÎÃBˆ]OÎˆÝš[™ÎÃBŸCBƒBš[\™˜XÙH\ØYYš[HÃBˆYˆÝš[™ÎÃBˆš[S˜[YNˆÝš[™ÎÃBˆZ[YU\NˆÝš[™ÎÃBˆÚ^™Nˆ[X™\ŽÃBˆ\›ˆÝš[™ÎÃBŸCBƒBš[\™˜XÙH\Q\œ›Ü›ÙHÃBˆ\œ›ÜÎˆÝš[™ÎÃBŸCBƒBš[\™˜XÙHÜYXÚ™\Ý[ZÙHÃBˆ™\Ý[Îˆ\œ˜^SZÙO\œ˜^SZÙOÈ˜[œØÜš\ˆÝš[™ÈOŽÃBŸCBƒBš[\™˜XÙHÜYXÚ™XÛÙÛš][Û“ZÙHÃBˆ[™ÎˆÝš[™ÎÃBˆ[\š[T™\Ý[Îˆ›ÛÛX[ŽÃBˆÛœ™\Ý[ˆ
+
+]™[ˆÜYXÚ™\Ý[ZÙJHOˆ›ÚY
+H[ÃBˆÛ™\œ›ÜŽˆ
+
+]™[ˆÈ\œ›ÜŽˆÝš[™ÈJHOˆ›ÚY
+H[ÃBˆÛ™[™ˆ
+
+
+HOˆ›ÚY
+H[ÃBˆÝ\
+
+Nˆ›ÚYÃBˆÝÜ
+
+Nˆ›ÚYÃBŸCBƒBš[\™˜XÙHÜYXÚÚ[™ÝÈ^[™ÈÚ[™ÝÈÃBˆÜYXÚ™XÛÙÛš][ÛÎˆ™]È
+
+HOˆÜYXÚ™XÛÙÛš][Û“ZÙNÃBˆÙXšÚ]ÜYXÚ™XÛÙÛš][ÛÎˆ™]È
+
+HOˆÜYXÚ™XÛÙÛš][Û“ZÙNÃBŸCBƒB˜Û\ÜÈ\Q\œ›Üˆ^[™È\œ›ÜˆÃBˆÛÛœÝXÝÜŠY\ÜØYÙNˆÝš[™Ë™XYÛ›HÝ]\Îˆ[X™\ŠHÃBˆÝ\\ŠY\ÜØYÙJNÃBˆ\Ë›˜[YHH\Q\œ›ÜˆŽÃBˆCBŸCBƒB˜\Þ[˜È[˜Ý[Ûˆ™\]Y\ÝŠ\›ˆÝš[™Ë[š]ˆ™\]Y\Ý[š]HßJNˆ›ÛZ\ÙOˆÃBˆÛÛœÝXY\œÈH™]ÈXY\œÊ[š]šXY\œÊNÃBˆYˆ
+[š]˜›ÙH	‰ˆJ[š]˜›ÙH[œÝ[˜Ù[Ùˆ›Ü›Q]JH	‰ˆZXY\œËš\ÊÛÛ[U\HŠJHÃBˆXY\œËœÙ]
+ÛÛ[U\H‹˜\XØ][Û‹ÚœÛÛˆŠNÃBˆCBˆÛÛœÝ™\ÜÛœÙHH]ØZ]™]Ú
+\›È‹‹š[š]Ü™Y[X[Îˆš[˜ÛYH‹XY\œÈJNÃBˆYˆ
+™\ÜÛœÙKœÝ]\ÈOOHŒ
+H™]\›ˆ[™Yš[™Y\ÈÃBˆÛÛœÝ›ÙNˆ[šÛ›ÝÛˆH]ØZ]™\ÜÛœÙKšœÛÛŠ
+K˜Ø]Ú
+
+
+HOˆ[
+NÃBˆYˆ
+\™\ÜÛœÙK›ÚÊHÃBˆÛÛœÝY\ÜØYÙHH›ÙH	‰ˆ\[Ùˆ›ÙHOOH›Øš™XÝˆ	‰ˆ™\œ›Üˆˆ[ˆ›ÙCBˆÈÝš[™Ê
+›ÙH\È\Q\œ›Ü›ÙJK™\œ›Üˆ™\]Y\Ý˜Z[Y
+	Ü™\ÜÛœÙKœÝ]\ßJK˜
+CBˆˆ™\]Y\Ý˜Z[Y
+	Ü™\ÜÛœÙKœÝ]\ßJK˜ÃBˆ›ÝÈ™]È\Q\œ›ÜŠY\ÜØYÙK™\ÜÛœÙKœÝ]\ÊNÃBˆCBˆ™]\›ˆ›ÙH\ÈÃBŸCBƒB™[˜Ý[ÛˆœÛÛ”™\]Y\Ý
+Y]ÙˆÝš[™Ë›ÙOÎˆ[šÛ›ÝÛŠNˆ™\]Y\Ý[š]ÃBˆ™]\›ˆÈY]Ù‹‹Š›ÙHOOH[™Yš[™YÈßHˆÈ›ÙNˆ”ÓÓ‹œÝš[™ÚYžJ›ÙJHJHNÃBŸCBƒB™[˜Ý[ÛˆXZÙRY
+
+HÃBˆ™]\›ˆÜž\Ëœ˜[™ÛUURQ
+
+NÃBŸCBƒB™[˜Ý[ÛˆÙ]ÝY\Ý\ÝÜžJ
+NˆÛÛ™\œØ][Û–×HÃBˆžHÃBˆÛÛœÝ˜[YNˆ[šÛ›ÝÛˆH”ÓÓ‹œ\œÙJØØ[ÝÜ˜YÙK™Ù]][JšÛÜK™ÝY\ÝXÛÛ™\œØ][ÛœËŒHŠH–×HŠNÃBˆYˆ
+P\œ˜^Kš\Ð\œ˜^J˜[YJJH™]\›ˆ×NÃBˆ™]\›ˆ˜[YK™š[\Š
+][JNˆ][H\ÈÛÛ™\œØ][ÛˆOƒBˆ][H	‰ˆ\[Ùˆ][KšYOOHœÝš[™Èˆ	‰ˆ\[Ùˆ][K]HOOHœÝš[™Èˆ	‰ˆ\œ˜^Kš\Ð\œ˜^J][K›Y\ÜØYÙ\ÊCBˆ
+NÃBˆHØ]Ú
+\œ›ÜŠHÃBˆÛÛœÛÛK™\œ›ÜŠÛÝ[›Ý™XYØØ[Ú]\ÝÜžNˆ‹\œ›ÜŠNÃBˆ™]\›ˆ×NÃBˆCBŸCBƒB™[˜Ý[Ûˆ\œ›Ü•^
+\œ›ÜŽˆ[šÛ›ÝÛŠHÃBˆ™]\›ˆ\œ›Üˆ[œÝ[˜Ù[Ùˆ\œ›ÜˆÈ\œ›Ü‹›Y\ÜØYÙHˆ”ÛÛY][™ÈÙ[Ü›Û™ËˆX\ÙHžHYØZ[‹ˆŽÃBŸCBƒB˜ÛÛœÝ[Ù\Îˆ\œ˜^OÈYˆ[ÙNÈX™[ˆÝš[™ÎÈ]Z[ˆÝš[™ÎÈXÛÛŽˆXÛÛÛÛ\Û™[OˆHÃBˆÈYˆ™˜\Ý‹X™[ˆ‘˜\Ý‹]Z[ˆ”]ZXÚÈ™\ÜÛœÙH‹XÛÛŽˆ˜\KBˆÈYˆœÛX\‹X™[ˆ”ÛX\‹]Z[ˆ˜[[˜ÙY\ÜÚ\Ý[‹XÛÛŽˆÜ\šÛ\ÈKBˆÈYˆœ™X\ÛÛš[™È‹X™[ˆ”™X\ÛÛš[™È‹]Z[ˆÛÛ\^[˜[\Ú\È‹XÛÛŽˆœ˜Z[ˆKBˆÈYˆ˜ÛÙ[™È‹X™[ˆÛÙ[™È‹]Z[ˆ”›ÙÜ˜[[Z[™È\ÜÚ\Ý[‹XÛÛŽˆÛÙLˆKBˆÈYˆœ™\ÙX\˜Ú‹X™[ˆ”™\ÙX\˜Ú‹]Z[ˆ”™X[ÙXˆÛÝ\˜Ù\È‹XÛÛŽˆÛØ™LˆKBˆÈYˆš\Ú[Ûˆ‹X™[ˆ•š\Ú[Ûˆ‹]Z[ˆ’[XYÙKX]Ø\™HÛÜšÙ›ÝÈ‹XÛÛŽˆ^YHCB—NÃBƒB˜ÛÛœÝ˜]šYØ][ÛŽˆ\œ˜^OÈX™[ˆÙXÝ[ÛŽÈXÛÛŽˆXÛÛÛÛ\Û™[OˆHÃBˆÈX™[ˆÚ]‹XÛÛŽˆÜ\šÛ\ÈKBˆÈX™[ˆ”ÙX\˜Ú‹XÛÛŽˆÙX\˜ÚKBˆÈX™[ˆ‘^Ü™H‹XÛÛŽˆÛØ™LˆKBˆÈX™[ˆ“Xœ˜\žH‹XÛÛŽˆXœ˜\žHKBˆÈX™[ˆ”Ù][™ÜÈ‹XÛÛŽˆÙ][™ÜÈCB—NÃBƒB™[˜Ý[ÛˆY\ÜØYÙUšY]ÊÃBˆY\ÜØYÙKBˆÛ‘™YY˜XÚËBˆÛÛÜKBˆÛ”ÜXZÃBŸNˆÃBˆY\ÜØYÙNˆÚ]Y\ÜØYÙNÃBˆÛ‘™YY˜XÚÎˆ
+Y\ÜØYÙNˆÚ]Y\ÜØYÙK˜][™Îˆ˜][™ÊHOˆ›ÚYÃBˆÛÛÜNˆ
+^ˆÝš[™ÊHOˆ›ÚYÃBˆÛ”ÜXZÎˆ
+^ˆÝš[™ÊHOˆ›ÚYÃBŸJHÃBˆÛÛœÝ\Õ\Ù\ˆHY\ÜØYÙKœ›ÛHOOH\Ù\ˆŽÃBˆ™]\›ˆ
+Bˆ\XÛHÛ\ÜÓ˜[YO^ØY\ÜØYÙH	ÛY\ÜØYÙKœ›Û_IÛY\ÜØYÙKœÝ™X[Z[™ÈÈˆÝ™X[Z[™ÈˆˆˆŸXOƒBˆÈZ\Õ\Ù\ˆ	‰ˆ]ˆÛ\ÜÓ˜[YOH›Y\ÜØYÙKX]˜]\ˆˆ\šXKZY[HYH[YÈÛ\ÜÓ˜[YOHš[‹Z[XYÙH[‹\ÛX[ˆÜ˜ÏH‹ÛÙÛËœ™Èˆ[HˆˆÏÙ]ŸCBˆ]ˆÛ\ÜÓ˜[YOH›Y\ÜØYÙK]\Ù\‹XÛÛ[ƒBˆ]ˆÛ\ÜÓ˜[YOH›Y\ÜØYÙKXÛÛ[ƒBˆÛY\ÜØYÙK˜ÛÛ[BˆÈ™XXÝX\šÙÝÛˆ™[X\šÔYÚ[œÏ^ÖÜ™[X\šÑÙ›W_OžÛY\ÜØYÙK˜ÛÛ[OÔ™XXÝX\šÙÝÛƒBˆˆ]ˆÛ\ÜÓ˜[YOH[šÚ[™Ë\Ý]Hˆ›ÛOHœÝ]\ÈÜ[ˆÛ\ÜÓ˜[YOH[šÚ[™Ë[Ü˜ˆ[YÈÛ\ÜÓ˜[YOH[šÚ[™Ë[ÙÛÈˆÜ˜ÏH‹ÛÙÛËœ™Èˆ[HˆˆÏÜÜ[Ü[ˆÛ\ÜÓ˜[YOH[šÚ[™Ë]Ø]™HHÏHÏHÏÜÜ[Ü[•[šÚ[™ÏÜÜ[Ù]ŸCBˆÈH[Y\ÜØYÙKœÛÝ\˜Ù\ÏË›[™Ý	‰ˆ]ˆÛ\ÜÓ˜[YOHœÛÝ\˜Ù\Èˆ\šXK[X™[H”ÛÝ\˜Ù\ÈƒBˆÛY\ÜØYÙKœÛÝ\˜Ù\Ë›X\
+
+ÛÝ\˜ÙK[™^
+HOˆHÙ^O^Ø	ÜÛÝ\˜ÙK\›KIÚ[™^XH™Y^ÜÛÝ\˜ÙK\›H\™Ù]H—Ø›[šÈˆ™[H››Ü™Y™\œ™\ˆ–ÞÚ[™^
+È_WHÜÛÝ\˜ÙK]HÛÝ\˜ÙK\›OØOŠ_CBˆÙ]ŸCBˆÙ]ƒBˆÈZ\Õ\Ù\ˆ	‰ˆ[Y\ÜØYÙKœÝ™X[Z[™È	‰ˆY\ÜØYÙK˜ÛÛ[	‰ˆ]ˆÛ\ÜÓ˜[YOH›Y\ÜØYÙKXXÝ[ÛœÈˆ\šXK[X™[H”™\ÜÛœÙHXÝ[ÛœÈƒBˆ]Ûˆ\OH˜]Ûˆˆ\šXK[X™[HÛÜH™\ÜÛœÙHˆ]OHÛÜHˆÛÛXÚÏ^Ê
+HOˆÛÛÜJY\ÜØYÙK˜ÛÛ[
+_OÛÜHÚ^™O^ÌMŸHÏØ]ÛƒBˆ]Ûˆ\OH˜]Ûˆˆ\šXK[X™[H”™XY™\ÜÛœÙH[ÝYˆ]OH”™XY[ÝYˆÛÛXÚÏ^Ê
+HOˆÛ”ÜXZÊY\ÜØYÙK˜ÛÛ[
+_O›Û[YLˆÚ^™O^ÌMŸHÏØ]ÛƒBˆ]Ûˆ\OH˜]Ûˆˆ\šXK[X™[H“X\šÈ[[ˆ]OH’[[ˆÛÛXÚÏ^Ê
+HOˆÛ‘™YY˜XÚÊY\ÜØYÙKš[[Š_O[XœÕ\Ú^™O^ÌMŸHÏØ]ÛƒBˆ]Ûˆ\OH˜]Ûˆˆ\šXK[X™[H“X\šÈ›Ý[[ˆ]OH“›Ý[[ˆÛÛXÚÏ^Ê
+HOˆÛ‘™YY˜XÚÊY\ÜØYÙK››ÝÚ[[Š_O[XœÑÝÛˆÚ^™O^ÌMŸHÏØ]ÛƒBˆÙ]ŸCBˆÙ]ƒBˆØ\XÛOƒBˆ
+NÃBŸCBƒB™[˜Ý[Ûˆ\
+
+HÃBˆÛÛœÝÝ\Ù\‹Ù]\Ù\—HH\ÙTÝ]O\Ù\ˆ[Š[
+NÃBˆÛÛœÝØ]]™XYKÙ]]]™XYWHH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝØ]]Ü[‹Ù]]]Ü[—HH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝÜ™YÚ\Ý\š[™ËÙ]™YÚ\Ý\š[™×HH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝØ]]\ÞKÙ]]]\ÞWHH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝØ]]\œ›Ü‹Ù]]]\œ›Ü—HH\ÙTÝ]JˆŠNÃBˆÛÛœÝØ]]˜[YKÙ]]]˜[YWHH\ÙTÝ]JˆŠNÃBˆÛÛœÝØ]][XZ[Ù]]][XZ[HH\ÙTÝ]JˆŠNÃBˆÛÛœÝØ]]\ÜÝÛÜ™Ù]]]\ÜÝÛÜ™HH\ÙTÝ]JˆŠNÃBˆÛÛœÝÜÙXÝ[Û‹Ù]ÙXÝ[Û—HH\ÙTÝ]OÙXÝ[ÛŠÚ]ŠNÃBˆÛÛœÝÜÚYX˜\“Ü[‹Ù]ÚYX˜\“Ü[—HH\ÙTÝ]J
+
+HOˆÈYˆ
+Ú[™ÝË›X]ÚYYXJŠX^]ÚYˆL
+HŠK›X]Ú\ÊH™]\›ˆ˜[ÙNÈžHÈÛÛœÝØ]™YHØØ[ÝÜ˜YÙK™Ù]][JšÛÜKœÚYX˜\ˆŠNÈYˆ
+Ø]™Y
+H™]\›ˆØ]™YOOH›Ü[ˆŽÈHØ]ÚßH™]\›ˆ˜[ÙNÈJNÃBˆÛÛœÝÛ[Øš[UšY]ÜÜÙ][Øš[UšY]ÜÜHH\ÙTÝ]J
+
+HOˆÚ[™ÝË›X]ÚYYXJŠX^]ÚYˆL
+HŠK›X]Ú\ÊNÃBˆÛÛœÝÛ[ÙKÙ][ÙWHH\ÙTÝ]O[ÙOŠœÛX\ŠNÃBˆÛÛœÝÚXY\“[ÙSÜ[‹Ù]XY\“[ÙSÜ[—HH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝÜ›Ùš[SY[SÜ[‹Ù]›Ùš[SY[SÜ[—HH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝØÛÛ\ÜÙ\“[ÙSÜ[‹Ù]ÛÛ\ÜÙ\“[ÙSÜ[—HH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝÙ\šËÙ]\š×HH\ÙTÝ]J
+
+HOˆÃBˆžHÈ™]\›ˆØØ[ÝÜ˜YÙK™Ù]][JšÛÜK[YHŠHOOH›YÚŽÈCBˆØ]Ú
+\œ›ÜŠHÈÛÛœÛÛK™\œ›ÜŠÛÝ[›Ý™XY[YH™Y™\™[˜ÙNˆ‹\œ›ÜŠNÈ™]\›ˆ˜[ÙNÈCBˆJNÃBˆÛÛœÝÜ™YXÙQY™™XÝËÙ]™YXÙQY™™XÝ×HH\ÙTÝ]J
+
+HOˆÃBˆžHÃBˆÛÛœÝØ]™YHØØ[ÝÜ˜YÙK™Ù]][JšÛÜKœ™YXÙKYY™™XÝÈŠNÃBˆ™]\›ˆØ]™YOOH[ÈÚ[™ÝË›X]ÚYYXJŠ™Y™\œË\™YXÙY[[Ý[ÛŽˆ™YXÙJHŠK›X]Ú\ÈˆØ]™YOOHYHŽÃBˆCBˆØ]Ú
+\œ›ÜŠHÈÛÛœÛÛK™\œ›ÜŠÛÝ[›Ý™XY[Ý[Ûˆ™Y™\™[˜ÙNˆ‹\œ›ÜŠNÈ™]\›ˆ˜[ÙNÈCBˆJNÃBˆÛÛœÝØÛÛ™\œØ][ÛœËÙ]ÛÛ™\œØ][Ûœ×HH\ÙTÝ]OÛÛ™\œØ][Û–×OŠ
+
+HOˆÙ]ÝY\Ý\ÝÜžJ
+JNÃBˆÛÛœÝØXÝ]™RYÙ]XÝ]™RYHH\ÙTÝ]OÝš[™È[Š[
+NÃBˆÛÛœÝÛY\ÜØYÙ\ËÙ]Y\ÜØYÙ\×HH\ÙTÝ]OÚ]Y\ÜØYÙV×OŠ×JNÃBˆÛÛœÝÜ›Û\Ù]›Û\HH\ÙTÝ]JˆŠNÃBˆÛÛœÝÝ\ØYYš[\ËÙ]\ØYYš[\×HH\ÙTÝ]O\ØYYš[V×OŠ×JNÃBˆÛÛœÝÜÝ™X[Z[™ËÙ]Ý™X[Z[™×HH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝÛ›ÝXÙKÙ]›ÝXÙWHH\ÙTÝ]JˆŠNÃBˆÛÛœÝÜ™Y™\™[˜Ù\ËÙ]™Y™\™[˜Ù\×HH\ÙTÝ]O™Y™\™[˜ÙOŠÃBˆX\›š[™ÎˆYKÜ›ÜÜÐÚ]ˆYK[™ÝXYÙNˆ‘[™Û\Ú‹\œÛÛ˜[]Nˆ˜˜[[˜ÙYƒBˆJNÃBˆÛÛœÝÛY[[ÜžSÜ[‹Ù]Y[[ÜžSÜ[—HH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝÛY[[ÜšY\ËÙ]Y[[ÜšY\×HH\ÙTÝ]OØ]™YY[[ÜžV×OŠ×JNÃBˆÛÛœÝÛY[[ÜžTÝ]ËÙ]Y[[ÜžTÝ]×HH\ÙTÝ]JÈY[[ÜžPÛÝ[ˆ›Ú™XÝÛÝ[ˆÝ[[X\žPÛÝ[ˆ™YY˜XÚÎˆßH\È™XÛÜ™Ýš[™Ë[X™\ˆJNÃBˆÛÛœÝÛY[[ÜžT]Y\žKÙ]Y[[ÜžT]Y\žWHH\ÙTÝ]JˆŠNÃBˆÛÛœÝÛY[[ÜžT™\Ý[ËÙ]Y[[ÜžT™\Ý[×HH\ÙTÝ]O\œ˜^OÈÛÛ™\œØ][Û’YˆÝš[™ÎÈ]NˆÝš[™ÎÈÝ[[X\žNˆÝš[™È[È\]Y]ˆÝš[™ÈOŠ×JNÃBˆÛÛœÝÙY][™ÓY[[ÜžRYÙ]Y][™ÓY[[ÜžRYHH\ÙTÝ]OÝš[™È[Š[
+NÃBˆÛÛœÝÛY[[ÜžQ˜YÙ]Y[[ÜžQ˜YHH\ÙTÝ]JˆŠNÃBˆÛÛœÝÜÙX\˜Ú]Y\žKÙ]ÙX\˜Ú]Y\žWHH\ÙTÝ]JˆŠNÃBˆÛÛœÝÜÙX\˜Ú™\Ý[ËÙ]ÙX\˜Ú™\Ý[×HH\ÙTÝ]OÛÝ\˜ÙV×OŠ×JNÃBˆÛÛœÝÜÙX\˜Ú\ÞKÙ]ÙX\˜Ú\ÞWHH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝÛXœ˜\žQš[\ËÙ]Xœ˜\žQš[\×HH\ÙTÝ]OXœ˜\žQš[V×OŠ×JNÃBˆÛÛœÝÛXœ˜\žP\ÞKÙ]Xœ˜\žP\ÞWHH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝÝÛÛ\KÙ]ÛÛ\WHH\ÙTÝ]Oš[XYÙHˆ™ØÞˆœˆˆœˆžÞŠš[XYÙHŠNÃBˆÛÛœÝÝÛÛ›Û\Ù]ÛÛ›Û\HH\ÙTÝ]JˆŠNÃBˆÛÛœÝÝÛÛ]KÙ]ÛÛ]WHH\ÙTÝ]JˆŠNÃBˆÛÛœÝÝÛÛ™\Ý[Ù]ÛÛ™\Ý[HH\ÙTÝ]O^Ü™T™\Ý[[Š[
+NÃBˆÛÛœÝÝÛÛ™]šY]ËÙ]ÛÛ™]šY]×HH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝÝÛÛÝ[KÙ]ÛÛÝ[WHH\ÙTÝ]JˆŠNÃBˆÛÛœÝÝÛÛ\ÜXÝÙ]ÛÛ\ÜXÝHH\ÙTÝ]JŒNŒHŠNÃBˆÛÛœÝÝÛÛ[XYÙQ›Ü›X]Ù]ÛÛ[XYÙQ›Ü›X]HH\ÙTÝ]Jœ™ÈŠNÃBˆÛÛœÝÝÛÛ›ÝšY\œËÙ]ÛÛ›ÝšY\œ×HH\ÙTÝ]OÈÜ›ÜOÎˆ›ÛÛX[ŽÈÝXš[]OÎˆ›ÛÛX[ˆH[Š[
+NÃBˆÛÛœÝÚ[XYÙR\ÝÜžKÙ][XYÙR\ÝÜžWHH\ÙTÝ]O\œ˜^OÈ›Û\ˆÝš[™ÎÈ™]šY]Õ\›ˆÝš[™ÎÈš[S˜[YNˆÝš[™ÈOŠ×JNÃBˆÛÛœÝÝÛÛ\ÞKÙ]ÛÛ\ÞWHH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝÝ›ÚXÙPXÝ]™KÙ]›ÚXÙPXÝ]™WHH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝÜÜXZÚ[™ËÙ]ÜXZÚ[™×HH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝØYZ[”Ý]\ËÙ]YZ[”Ý]\×HH\ÙTÝ]O™XÛÜ™Ýš[™Ë›ÛÛX[ˆ[Š[
+NÃBˆÛÛœÝØYZ[•\Ù\œËÙ]YZ[•\Ù\œ×HH\ÙTÝ]O\œ˜^OÈYˆÝš[™ÎÈ[XZ[ˆÝš[™ÎÈ˜[YNˆÝš[™È[È›ÛNˆÝš[™ÎÈÜ™X]Y]ˆÝš[™ÈOŠ×JNÃBˆÛÛœÝØYZ[\ÞKÙ]YZ[\ÞWHH\ÙTÝ]J˜[ÙJNÃBˆÛÛœÝÜÙ][™ÜÑ]Z[Ù]Ù][™ÜÑ]Z[HH\ÙTÝ]JˆŠNÃBˆÛÛœÝÜÙ][™ÜÔÙX\˜ÚÙ]Ù][™ÜÔÙX\˜ÚHH\ÙTÝ]JˆŠNÃBˆÛÛœÝ\›ÛÝ™YˆH\ÙT™YS]‘[[Y[Š[
+NÃBˆÛÛœÝY\ÜØYÙ\Ô™YˆH\ÙT™YS]‘[[Y[Š[
+NÃBˆÛÛœÝ^\™XT™YˆH\ÙT™YS^\™XQ[[Y[Š[
+NÃBˆÛÛœÝš[R[œ]™YˆH\ÙT™YS[œ][[Y[Š[
+NÃBˆÛÛœÝ™XÛÙÛš][Û”™YˆH\ÙT™YÜYXÚ™XÛÙÛš][Û“ZÙH[Š[
+NÃBˆÛÛœÝX›Ü™YˆH\ÙT™YX›ÜÛÛ›Û\ˆ[Š[
+NÃBˆÛÛœÝÝXÚÕÐ›ÝÛT™YˆH\ÙT™YŠYJNÃBˆÛÛœÝØÜ›Ûœ˜[YT™YˆH\ÙT™Y[X™\ˆ[Š[
+NÃBˆÛÛœÝ\˜[^œ˜[YT™YˆH\ÙT™Y[X™\ˆ[Š[
+NÃBˆÛÛœÝÜÚÝÔØÜ›ÛÓ]\ÝÙ]ÚÝÔØÜ›ÛÓ]\ÝHH\ÙTÝ]J˜[ÙJNÃBƒBˆÛÛœÝÝ\œ™[[ÙHH\ÙSY[[Ê
+
+HOˆ[Ù\Ë™š[™
+][HOˆ][KšYOOH[ÙJH[Ù\ÖÌWKÛ[ÙWJNÃBˆÛÛœÝ[ÙRXÛÛˆHÝ\œ™[[ÙKšXÛÛŽÃBˆÛÛœÝ\ÜÚ\Ý[š\ÝX[Ý]HH›ÚXÙPXÝ]™HÈ›\Ý[š[™ÈƒBˆˆÛÛ\ÞHÈ™Ù[™\˜][™ÈƒBˆˆÙX\˜Ú\ÞH
+Ý™X[Z[™È	‰ˆ[ÙHOOHœ™\ÙX\˜ÚŠHÈœÙX\˜Ú[™ÈƒBˆˆÝ™X[Z[™ÈÈ[šÚ[™ÈƒBˆˆÜXZÚ[™ÈÈœÜXZÚ[™ÈƒBˆˆ×ŠÎ™˜Z[Y\œ›ÜŸÛÝ[›Ý
+W‹ÚK\Ý
+›ÝXÙJHÈ™\œ›ÜˆƒBˆˆšYHŽÃBƒBˆÛÛœÝØYÛÛ™\œØ][ÛœÈH\ÙPØ[˜XÚÊ\Þ[˜È
+
+HOˆÃBˆYˆ
+]\Ù\ŠHÃBˆÙ]ÛÛ™\œØ][ÛœÊÙ]ÝY\Ý\ÝÜžJ
+JNÃBˆ™]\›ŽÃBˆCBˆÙ]ÛÛ™\œØ][ÛœÊ]ØZ]™\]Y\ÝÛÛ™\œØ][Û–×OŠ‹Ø\KØÛÛ™\œØ][ÛœÈŠJNÃBˆKÝ\Ù\—JNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆ]XÝ]™HHYNÃBˆ™\]Y\ÝÈ]][XØ]Yˆ›ÛÛX[ŽÈ\Ù\Îˆ\Ù\ˆOŠ‹Ø\KØ]]ÛYHŠCBˆ[Š™\Ý[OˆÈYˆ
+XÝ]™H	‰ˆ™\Ý[˜]][XØ]Y	‰ˆ™\Ý[\Ù\ŠHÙ]\Ù\Š™\Ý[\Ù\ŠNÈJCBˆ˜Ø]Ú
+\œ›ÜˆOˆÃBˆYˆ
+XÝ]™H	‰ˆ
+J\œ›Üˆ[œÝ[˜Ù[Ùˆ\Q\œ›ÜŠH\œ›Ü‹œÝ]\ÈOOHJJHÙ]›ÝXÙJ\œ›Ü•^
+\œ›ÜŠJNÃBˆJCBˆ™š[˜[J
+
+HOˆÈYˆ
+XÝ]™JHÙ]]]™XYJYJNÈJNÃBˆ™]\›ˆ
+
+HOˆÈXÝ]™HH˜[ÙNÈNÃBˆK×JNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆÛÛœÝšY]ÜÜHÚ[™ÝË›X]ÚYYXJŠX^]ÚYˆL
+HŠNÃBˆÛÛœÝ\]HH
+
+HOˆÙ][Øš[UšY]ÜÜ
+šY]ÜÜ›X]Ú\ÊNÃBˆšY]ÜÜ˜Y]™[\Ý[™\Š˜Ú[™ÙH‹\]JNÃBˆ™]\›ˆ
+
+HOˆšY]ÜÜœ™[[Ý™Q]™[\Ý[™\Š˜Ú[™ÙH‹\]JNÃBˆK×JNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆÛÛœÝ›ÛÝH\›ÛÝ™Y‹˜Ý\œ™[ÃBˆYˆ
+\›ÛÝ™YXÙQY™™XÝÈÚ[™ÝË›X]ÚYYXJŠ™Y™\œË\™YXÙY[[Ý[ÛŽˆ™YXÙJHŠK›X]Ú\ÊH™]\›ŽÃBˆÛÛœÝ[Ý™HH
+]™[ˆÚ[\‘]™[
+HOˆÃBˆYˆ
+]™[œÚ[\•\HOOH›[Ý\ÙHŠH™]\›ŽÃBˆÛÛœÝ›Ý[™ÈH›ÛÝ™Ù]›Ý[™[™ÐÛY[™XÝ
+
+NÃBˆÛÛœÝH
+]™[˜ÛY[H›Ý[™Ë›Y
+HÈ›Ý[™ËÚYHNÃBˆÛÛœÝHH
+]™[˜ÛY[HH›Ý[™ËÜ
+HÈ›Ý[™ËšZYÚHNÃBˆYˆ
+\˜[^œ˜[YT™Y‹˜Ý\œ™[OOH[
+HÚ[™ÝË˜Ø[˜Ù[[š[X][Û‘œ˜[YJ\˜[^œ˜[YT™Y‹˜Ý\œ™[
+NÃBˆ\˜[^œ˜[YT™Y‹˜Ý\œ™[HÚ[™ÝËœ™\]Y\Ý[š[X][Û‘œ˜[YJ
+
+HOˆÃBˆ›ÛÝœÝ[KœÙ]›Ü\J‹K\Ú[\‹^‹	Þ
+ˆN\
+NÃBˆ›ÛÝœÝ[KœÙ]›Ü\J‹K\Ú[\‹^H‹	ÞH
+ˆM\
+NÃBˆ\˜[^œ˜[YT™Y‹˜Ý\œ™[H[ÃBˆJNÃBˆNÃBˆÛÛœÝ™\Ù]H
+
+HOˆÃBˆ›ÛÝœÝ[KœÙ]›Ü\J‹K\Ú[\‹^‹ŒŠNÃBˆ›ÛÝœÝ[KœÙ]›Ü\J‹K\Ú[\‹^H‹ŒŠNÃBˆNÃBˆ›ÛÝ˜Y]™[\Ý[™\ŠœÚ[\›[Ý™H‹[Ý™KÈ\ÜÚ]™NˆYHJNÃBˆ›ÛÝ˜Y]™[\Ý[™\ŠœÚ[\›X]™H‹™\Ù]È\ÜÚ]™NˆYHJNÃBˆ™]\›ˆ
+
+HOˆÃBˆ›ÛÝœ™[[Ý™Q]™[\Ý[™\ŠœÚ[\›[Ý™H‹[Ý™JNÃBˆ›ÛÝœ™[[Ý™Q]™[\Ý[™\ŠœÚ[\›X]™H‹™\Ù]
+NÃBˆYˆ
+\˜[^œ˜[YT™Y‹˜Ý\œ™[OOH[
+HÚ[™ÝË˜Ø[˜Ù[[š[X][Û‘œ˜[YJ\˜[^œ˜[YT™Y‹˜Ý\œ™[
+NÃBˆNÃBˆKÜ™YXÙQY™™XÝ×JNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆYˆ
+]]™XYJH›ÚYØYXœ˜\žJ
+NÃBˆKØ]]™XYK\Ù\—JNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆYˆ
+X]]™XYJH™]\›ŽÃBˆYˆ
+]\Ù\ŠHÃBˆÙ]ÛÛ™\œØ][ÛœÊÙ]ÝY\Ý\ÝÜžJ
+JNÃBˆ™]\›ŽÃBˆCBˆ]XÝ]™HHYNÃBˆ›ÛZ\ÙK˜[
+ÃBˆ™\]Y\ÝÛÛ™\œØ][Û–×OŠ‹Ø\KØÛÛ™\œØ][ÛœÈŠKBˆ™\]Y\Ý™Y™\™[˜ÙOŠ‹Ø\KÛY[[ÜžKÜ™Y™\™[˜Ù\ÈŠCBˆJK[Š
+Ú\ÝÜžKØ]™Y™Y™\™[˜Ù\×JHOˆÃBˆYˆ
+XXÝ]™JH™]\›ŽÃBˆÙ]ÛÛ™\œØ][ÛœÊ\ÝÜžJNÃBˆÙ]™Y™\™[˜Ù\ÊØ]™Y™Y™\™[˜Ù\ÊNÃBˆJK˜Ø]Ú
+\œ›ÜˆOˆÈYˆ
+XÝ]™JHÙ]›ÝXÙJ\œ›Ü•^
+\œ›ÜŠJNÈJNÃBˆ™]\›ˆ
+
+HOˆÈXÝ]™HH˜[ÙNÈNÃBˆKÝ\Ù\‹]]™XYWJNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆYˆ
+]\Ù\ˆ	‰ˆXÝ]™RY	‰ˆY\ÜØYÙ\Ë›[™Ý
+HÃBˆÙ]ÛÛ™\œØ][ÛœÊ™]š[Ý\ÈOˆÃBˆÛÛœÝÛH™]š[Ý\Ë™š[™
+][HOˆ][KšYOOHXÝ]™RY
+NÃBˆÛÛœÝ™^ˆÛÛ™\œØ][ÛˆHÃBˆYˆXÝ]™RYBˆ]NˆÛË]HY\ÜØYÙ\Ë™š[™
+][HOˆ][Kœ›ÛHOOH\Ù\ˆŠOË˜ÛÛ[œÛXÙJŒ
+H“™]ÈÚ]‹Bˆ[ÙKBˆY\ÜØYÙ\ËBˆ\˜Ú]™YˆÛË˜\˜Ú]™Y˜[ÙKBˆ[›™YˆÛËœ[›™Y˜[ÙCBˆNÃBˆÛÛœÝ\]YHÛ™^‹‹œ™]š[Ý\Ë™š[\Š][HOˆ][KšYOOHXÝ]™RY
+WKœÛXÙJL
+NÃBˆžHÈØØ[ÝÜ˜YÙKœÙ]][JšÛÜK™ÝY\ÝXÛÛ™\œØ][ÛœËŒH‹”ÓÓ‹œÝš[™ÚYžJ\]Y
+JNÈCBˆØ]Ú
+\œ›ÜŠHÈÛÛœÛÛK™\œ›ÜŠÛÝ[›ÝØ]™HØØ[Ú]\ÝÜžNˆ‹\œ›ÜŠNÈCBˆ™]\›ˆ\]YÃBˆJNÃBˆCBˆKÝ\Ù\‹XÝ]™RYY\ÜØYÙ\Ë[ÙWJNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆÛÛœÝX]ÚHÚ[™ÝË›ØØ][Û‹œ]˜[YK›X]Ú
+×—ØÚ]Ê×‹×JÊKÊNÃBˆYˆ
+[X]Ú
+H™]\›ŽÃBˆÛÛœÝ›Ý]S[ÙHHX]ÚÌWH\È[ÙNÃBˆYˆ
+[Ù\ËœÛÛYJÜ[ÛˆOˆÜ[Û‹šYOOH›Ý]S[ÙJJHÃBˆÙ][ÙJ›Ý]S[ÙJNÃBˆÙ]ÙXÝ[ÛŠÚ]ŠNÃBˆCBˆK×JNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆžHÈØØ[ÝÜ˜YÙKœÙ]][JšÛÜK[YH‹\šÈÈ™\šÈˆˆ›YÚŠNÈCBˆØ]Ú
+\œ›ÜŠHÈÛÛœÛÛK™\œ›ÜŠÛÝ[›ÝØ]™H[YH™Y™\™[˜ÙNˆ‹\œ›ÜŠNÈCBˆKÙ\š×JNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆžHÈØØ[ÝÜ˜YÙKœÙ]][JšÛÜKœ™YXÙKYY™™XÝÈ‹Ýš[™Ê™YXÙQY™™XÝÊJNÈCBˆØ]Ú
+\œ›ÜŠHÈÛÛœÛÛK™\œ›ÜŠÛÝ[›ÝØ]™H[Ý[Ûˆ™Y™\™[˜ÙNˆ‹\œ›ÜŠNÈCBˆKÜ™YXÙQY™™XÝ×JNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆÛÛœÝ[[Y[HY\ÜØYÙ\Ô™Y‹˜Ý\œ™[ÃBˆYˆ
+Y[[Y[
+H™]\›ŽÃBˆYˆ
+\ÝXÚÕÐ›ÝÛT™Y‹˜Ý\œ™[
+HÃBˆÙ]ÚÝÔØÜ›ÛÓ]\Ý
+YJNÃBˆ™]\›ŽÃBˆCBˆYˆ
+ØÜ›Ûœ˜[YT™Y‹˜Ý\œ™[OOH[
+H™]\›ŽÃBˆØÜ›Ûœ˜[YT™Y‹˜Ý\œ™[HÚ[™ÝËœ™\]Y\Ý[š[X][Û‘œ˜[YJ
+
+HOˆÃBˆØÜ›Ûœ˜[YT™Y‹˜Ý\œ™[H[ÃBˆÛÛœÝ]\ÝHY\ÜØYÙ\Ô™Y‹˜Ý\œ™[ÃBˆYˆ
+]\Ý	‰ˆÝXÚÕÐ›ÝÛT™Y‹˜Ý\œ™[
+H]\ÝœØÜ›ÛÊÈÜˆ]\ÝœØÜ›ÛZYÚ™Z]š[ÜŽˆš[œÝ[ˆJNÃBˆJNÃBˆKÛY\ÜØYÙ\×JNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆÛÛœÝ^\™XHH^\™XT™Y‹˜Ý\œ™[ÃBˆYˆ
+]^\™XJH™]\›ŽÃBˆ^\™XKœÝ[KšZYÚH˜]]ÈŽÃBˆ^\™XKœÝ[KšZYÚH	ÓX]›Z[Š^\™XKœØÜ›ÛZYÚMŒ
+_\ÃBˆKÜ›Û\JNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆ
+
+HOˆÃBˆYˆ
+ØÜ›Ûœ˜[YT™Y‹˜Ý\œ™[OOH[
+HÚ[™ÝË˜Ø[˜Ù[[š[X][Û‘œ˜[YJØÜ›Ûœ˜[YT™Y‹˜Ý\œ™[
+NÃBˆYˆ
+œÜYXÚÞ[\Ú\Èˆ[ˆÚ[™ÝÊHÜYXÚÞ[\Ú\Ë˜Ø[˜Ù[
+
+NÃBˆK×JNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆYˆ
+[›ÝXÙJH™]\›ŽÃBˆÛÛœÝ[Y\ˆHÚ[™ÝËœÙ][Y[Ý]
+
+
+HOˆÙ]›ÝXÙJˆŠKŒ
+NÃBˆ™]\›ˆ
+
+HOˆÚ[™ÝË˜ÛX\•[Y[Ý]
+[Y\ŠNÃBˆKÛ›ÝXÙWJNÃBƒBˆ\ÙQY™™XÝ
+
+
+HOˆÃBˆÛÛœÝÛ’Ù^QÝÛˆH
+]™[ˆÛØ˜[\Ë’Ù^X›Ø\™]™[
+HOˆÃBˆYˆ
+]™[šÙ^HOOH‘\ØØ\HŠHÃBˆYˆ
+Y[[ÜžSÜ[ŠHÙ]Y[[ÜžSÜ[Š˜[ÙJNÃBˆ[ÙHYˆ
+]]Ü[ŠHÙ]]]Ü[Š˜[ÙJNÃBˆ[ÙHYˆ
+XY\“[ÙSÜ[ŠHÙ]XY\“[ÙSÜ[Š˜[ÙJNÃBˆ[ÙHYˆ
+ÛÛ\ÜÙ\“[ÙSÜ[ŠHÙ]ÛÛ\ÜÙ\“[ÙSÜ[Š˜[ÙJNÃBˆ[ÙHYˆ
+[Øš[UšY]ÜÜ
+HÙ]ÚYX˜\“Ü[Š˜[ÙJNÃBˆ™]\›ŽÃBˆCBˆÛÛœÝœ›ÝÜÙ\ˆH×ŠÎœÛX\ËHOÝŸ^™[ŸÙX›Üß[™›ÚYŸÛÛÙÛHŸÛÛÙÛ]ŸYŸœ˜]šXJW‹ÚK\Ý
+˜]šYØ]Ü‹\Ù\YÙ[
+NÃBˆYˆ
+]œ›ÝÜÙ\ˆ	‰ˆ]Ú[™ÝË›X]ÚYYXJŠZ[‹]ÚYˆNLŒ
+H[™
+Ý™\Žˆ›Û™JHŠK›X]Ú\ÊH™]\›ŽÃBˆÛÛœÝ\™Ù]H]™[\™Ù]\ÈS[[Y[[ÃBˆYˆ
+È’S”U‹•VT‘PH‹”ÑSPÕ‹•UÓˆ—Kš[˜ÛY\Ê\™Ù]ËYÓ˜[YHˆŠJH™]\›ŽÃBˆYˆ
+VÈ\œ›ÝÑÝÛˆ‹\œ›ÝÔšYÚ‹\œ›ÝÕ\‹\œ›ÝÓY—Kš[˜ÛY\Ê]™[šÙ^JJH™]\›ŽÃBˆÛÛœÝ][\ÈH\œ˜^K™œ›ÛJØÝ[Y[œ]Y\žTÙ[XÝÜ[S[[Y[ŠBˆ	Ø]ÛŽ››Ý
+Ù\ØX›YJKVÚ™Y—K[œ]››Ý
+Ù\ØX›YJK^\™XN››Ý
+Ù\ØX›YJKÙ[XÝ››Ý
+Ù\ØX›YJKÝXš[™^HŒ—IÃBˆ
+JK™š[\Š][HOˆ][K›Ù™œÙ]ÚY	‰ˆ][K›Ù™œÙ]ZYÚ
+NÃBˆYˆ
+Z][\Ë›[™Ý
+H™]\›ŽÃBˆ]™[œ™]™[Y˜][
+
+NÃBˆÛÛœÝ[™^H][\Ëš[™^ÙŠØÝ[Y[˜XÝ]™Q[[Y[\ÈS[[Y[
+NÃBˆÛÛœÝ›ÜØ\™H]™[šÙ^HOOH\œ›ÝÑÝÛˆˆ]™[šÙ^HOOH\œ›ÝÔšYÚŽÃBˆ][\ÖÊ[™^
+È
+›ÜØ\™ÈHˆLJH
+È][\Ë›[™Ý
+H	H][\Ë›[™ÝOË™›ØÝ\Ê
+NÃBˆNÃBˆÚ[™ÝË˜Y]™[\Ý[™\ŠšÙ^YÝÛˆ‹Û’Ù^QÝÛŠNÃBˆ™]\›ˆ
+
+HOˆÚ[™ÝËœ™[[Ý™Q]™[\Ý[™\ŠšÙ^YÝÛˆ‹Û’Ù^QÝÛŠNÃBˆKØ]]Ü[‹ÛÛ\ÜÙ\“[ÙSÜ[‹XY\“[ÙSÜ[‹Y[[ÜžSÜ[‹[Øš[UšY]ÜÜJNÃBƒBˆ[˜Ý[Ûˆ™]ÐÚ]
+
+HÃBˆX›Ü™Y‹˜Ý\œ™[Ë˜X›Ü
+
+NÃBˆÝXÚÕÐ›ÝÛT™Y‹˜Ý\œ™[HYNÃBˆÙ]ÚÝÔØÜ›ÛÓ]\Ý
+˜[ÙJNÃBˆÙ]XÝ]™RY
+[
+NÃBˆÙ]Y\ÜØYÙ\Ê×JNÃBˆÙ]›Û\
+ˆŠNÃBˆÙ]\ØYYš[\Ê×JNÃBˆÙ]Ý™X[Z[™Ê˜[ÙJNÃBˆÙ]ÙXÝ[ÛŠÚ]ŠNÃBˆÙ]ÚYX˜\“Ü[Š˜[ÙJNÃBˆÚ[™ÝËœÙ][Y[Ý]
+
+
+HOˆ^\™XT™Y‹˜Ý\œ™[Ë™›ØÝ\Ê
+K
+NÃBˆCBƒBˆ[˜Ý[ÛˆÙ[XÝÛÛ™\œØ][ÛŠÛÛ™\œØ][ÛŽˆÛÛ™\œØ][ÛŠHÃBˆX›Ü™Y‹˜Ý\œ™[Ë˜X›Ü
+
+NÃBˆÝXÚÕÐ›ÝÛT™Y‹˜Ý\œ™[HYNÃBˆÙ]ÚÝÔØÜ›ÛÓ]\Ý
+˜[ÙJNÃBˆÙ]XÝ]™RY
+ÛÛ™\œØ][Û‹šY
+NÃBˆÙ]Y\ÜØYÙ\ÊÛÛ™\œØ][Û‹›Y\ÜØYÙ\ÊNÃBˆÙ][ÙJ[Ù\ËœÛÛYJ][HOˆ][KšYOOHÛÛ™\œØ][Û‹›[ÙJHÈÛÛ™\œØ][Û‹›[ÙH\È[ÙHˆœÛX\ŠNÃBˆÙ]ÙXÝ[ÛŠÚ]ŠNÃBˆÙ]ÚYX˜\“Ü[Š˜[ÙJNÃBˆCBƒBˆ\Þ[˜È[˜Ý[Ûˆ\]PÛÛ™\œØ][Û‘›YÊYˆÝš[™Ë›YÎˆœ[›™Yˆ˜\˜Ú]™YŠHÃBˆÛÛœÝ][HHÛÛ™\œØ][ÛœË™š[™
+ÛÛ™\œØ][ÛˆOˆÛÛ™\œØ][Û‹šYOOHY
+NÃBˆYˆ
+Z][JH™]\›ŽÃBˆÛÛœÝ˜[YHHZ][VÙ›Y×NÃBˆYˆ
+\Ù\ŠHÃBˆžHÈ]ØZ]™\]Y\Ý
+Ø\KØÛÛ™\œØ][ÛœËÉÙ[˜ÛÙUT’PÛÛ\Û™[
+Y
+_XœÛÛ”™\]Y\Ý
+”UÒ‹ÈÙ›Y×Nˆ˜[YHJJNÈCBˆØ]Ú
+\œ›ÜŠHÈÙ]›ÝXÙJ\œ›Ü•^
+\œ›ÜŠJNÈ™]\›ŽÈCBˆCBˆÙ]ÛÛ™\œØ][ÛœÊ™]š[Ý\ÈOˆ™]š[Ý\Ë›X\
+ÛÛ™\œØ][ÛˆOˆÛÛ™\œØ][Û‹šYOOHYÈÈ‹‹˜ÛÛ™\œØ][Û‹Ù›Y×Nˆ˜[YHHˆÛÛ™\œØ][ÛŠJNÃBˆCBƒBˆ\Þ[˜È[˜Ý[Ûˆ[]PÛÛ™\œØ][ÛŠYˆÝš[™ÊHÃBˆYˆ
+]Ú[™ÝË˜ÛÛ™š\›J‘[]H\ÈÛÛ™\œØ][ÛÈ\ÈØ[››Ý™H[™Û™KˆŠJH™]\›ŽÃBˆžHÃBˆYˆ
+\Ù\ŠH]ØZ]™\]Y\Ý
+Ø\KØÛÛ™\œØ][ÛœËÉÙ[˜ÛÙUT’PÛÛ\Û™[
+Y
+_XÈY]Ùˆ‘SUHˆJNÃBˆÛÛœÝ\]YHÛÛ™\œØ][ÛœË™š[\Š][HOˆ][KšYOOHY
+NÃBˆÙ]ÛÛ™\œØ][ÛœÊ\]Y
+NÃBˆYˆ
+]\Ù\ŠHØØ[ÝÜ˜YÙKœÙ]][JšÛÜK™ÝY\ÝXÛÛ™\œØ][ÛœËŒH‹”ÓÓ‹œÝš[™ÚYžJ\]Y
+JNÃBˆYˆ
+XÝ]™RYOOHY
+H™]ÐÚ]
+
+NÃBˆHØ]Ú
+\œ›ÜŠHÈÙ]›ÝXÙJ\œ›Ü•^
+\œ›ÜŠJNÈCBˆCBƒBˆ\Þ[˜È[˜Ý[Ûˆ\ØYš[\Ê]™[ˆÚ[™ÙQ]™[S[œ][[Y[ŠHÃBˆÛÛœÝÙ[XÝYH\œ˜^K™œ›ÛJ]™[˜Ý\œ™[\™Ù]™š[\È×JNÃBˆ]™[˜Ý\œ™[\™Ù]˜[YHHˆŽÃBˆYˆ
+\Ù[XÝY›[™Ý
+H™]\›ŽÃBˆÛÛœÝ›Ü›HH™]È›Ü›Q]J
+NÃBˆÙ[XÝYœÛXÙJL
+K™›Ü‘XXÚ
+š[ÞôæÚ$z{-®éÜj×VFW"6Æ74æÖSÒ'vRÖ†VF–ær#ãÆƒå6V&6‚F†RvV#ÂöƒãÇäf–æB7W'&VçB6÷W&6W2æBW‡Æ÷&RW6VgVÂ–æf÷&ÖF–öâãÂ÷ãÂö†VFW#àÐ¢Æf÷&Òöå7V&Ö—C×¶WfVçBÓâfö–B'VåvV%6V&6‚†WfVçB—Ò&öÆSÒ'6V&6‚#àÐ¢Æ–çWB6Æ74æÖSÒ&6†B×6V&6‚"fÇVS×·6V&6…VW'—Òöä6†ævS×¶WfVçBÓâ6WE6V&6…VW'’†WfVçBçF&vWBçfÇVR—ÒÆ6V†öÆFW#Ò%6V&6‚F÷–>(
+b"&–ÖÆ&VÃÒ%6V&6‚F†RvV""óàÐ¢Æ'WGFöâ6Æ74æÖSÒ&WF‚×7V&Ö—B"G—SÒ'7V&Ö—B"F—6&ÆVC×·6V&6„'W7’ÇÂ6V&6…VW'’çG&–Ò‚—Óç·6V&6„'W7’ò%6V&6†–æ~(
+b"¢%6V&6‚'ÓÂö'WGFöãàÐ¢Âöf÷&ÓàÐ¢ÆF—b6Æ74æÖSÒ'6V&6‚×&W7VÇG2#ç·6V&6…&W7VÇG2æÖ‚†—FVÒÂ–æFW‚’ÓâÆ6Æ74æÖSÒ'6V&6‚×&W7VÇG2Ö6&B"¶W“×¶G¶—FVÒçW&ÇÒÒG¶–æFW‡ÖÒ‡&Vc×¶—FVÒçW&ÇÒF&vWCÒ%ö&Ææ²"&VÃÒ&æ÷&VfW'&W"#ãÇ7G&öæsç¶—FVÒçF—FÆRÇÂ—FVÒçW&ÇÓÂ÷7G&öæsãÇ7ãç¶—FVÒçW&ÇÓÂ÷7ããÇç¶—FVÒæ6öçFVçGÓÂ÷ãÂöâ—ÓÂöF—càÐ¢Â÷6V7F–öãçÐÐ Ð¢·6V7F–öâÓÓÒ$W‡Æ÷&R"bbÇ6V7F–öâ6Æ74æÖSÒ'vR#àÐ¢Æ†VFW"6Æ74æÖSÒ'vRÖ†VF–ær#ãÆƒäW‡Æ÷&SÂöƒãÇä7&VFRW6VgVÂ6öçFVçBv—F‚´õÄ’’FööÇ2ãÂ÷ãÂö†VFW#àÐ¢ÆF—b6Æ74æÖSÒ'FööÂÖw&–BW‡Æ÷&R×FööÂÖw&–B#àÐ¢²…°Ð¢²&–ÖvR"Â–ÖvT–6öâÂ$–ÖvRvVæW&F–öâ"Â$7&VFRâ–ÖvRg&öÒFW‡BFW67&—F–öââ"Â"÷FööÇ2öW‡Æ÷&RÖ–ÖvRç7fr%ÒÀÐ¢²&Fö7‚"Âf–ÆUFW‡BÂ$Fö7VÖVçG2"Â$G&gBÂVF—BÂ&Wf–WrÂæBW‡÷'B–÷W"Fö7VÖVçBâ"Â"÷FööÇ2öW‡Æ÷&RÖFö7VÖVçG2ç7fr%ÒÀÐ¢²'Fb"Âf–ÆUFW‡BÂ%Db&W÷'G2"Â$vVæW&FRöÆ—6†VBÂ&–çF&ÆR&W÷'Bâ"Â"÷FööÇ2öW‡Æ÷&R×Fbç7fr%ÒÀÐ¢²'G‚"ÂÆ–'&'’Â%&W6VçFF–öç2"Â$vVæW&FR&öfW76–öæÂ6Æ–FRFV6²â"Â"÷FööÇ2öW‡Æ÷&R×&W6VçFF–öç2ç7fr%ÒÀÐ¢²'†Ç7‚"ÂÆ–'&'’Â%7&VG6†VWG2"Â%GW&â&WVW7B–çFò7G'V7GW&VBv÷&¶&öö²â"Â"÷FööÇ2öW‡Æ÷&R×7&VG6†VWBç7fr%ÐÐ¢Ò26öç7B’æÖ‚…·G—RÂ–6öâÂF—FÆRÂFW67&—F–öâÂ–ÖvUÒ’ÓâÆ'WGFöâG—SÒ&'WGFöâ"6Æ74æÖS×¶FööÂÖ6&BW‡Æ÷&R×FööÂÖ6&BG·FööÅG—RÓÓÒG—Rò"6VÆV7FVB"¢"'ÖÒ¶W“×·G—WÒ&–×&W76VC×·FööÅG—RÓÓÒG—WÒöä6Æ–6³×²‚’Óâ²6WEFööÅG—R‡G—R“²6WEFööÅ&W7VÇB†çVÆÂ“²×ÓàÐ¢Æ–Ör6Æ74æÖSÒ&W‡Æ÷&R×FööÂÖ–ÖvR"7&3×¶–ÖvWÒÇCÒ""ÆöF–æsÒ&Æ§’"óàÐ¢Ç7â6Æ74æÖSÒ'FööÂÖ–6öâ#ãÄ–6öâ6—¦S×³—ÒóãÂ÷7ããÆƒ3ç·F—FÆWÓÂöƒ3ãÇç¶FW67&—F–öçÓÂ÷ãÇ7â6Æ74æÖSÒ&W‡Æ÷&RÖ÷VâÖÆ&VÂ#ä÷VâFööÂÄ6†Wg&öå&–v‡B6—¦S×³GÒóãÂ÷7ãàÐ¢Âö'WGFöãâ—ÐÐ¢ÂöF—càÐ¢ÆF—b6Æ74æÖSÒ'6WGF–æw2Ö6&BÖöFW&âW‡Æ÷&R×v÷&·76R"&–ÖÆ&VÃ×¶G·FööÅG—WÒFööÆÓàÐ¢²W6W"bbÆF—b6Æ74æÖSÒ&W‡Æ÷&R×&÷f–FW"Öæ÷FR#ãÇ7G&öæså6–vâ–âFò7&VFRæBF÷væÆöBf–ÆW3Â÷7G&öæsãÇ7ãävVæW&FVBf–ÆW2&R&—fFRFò–÷W"66÷VçBãÂ÷7ããÆ'WGFöâG—SÒ&'WGFöâ"öä6Æ–6³×²‚’Óâ6WDWF„÷Vâ‡G'VR—Óå6–vâ–ãÂö'WGFöããÂöF—cçÐÐ¢·W6W"bbFööÅ&÷f–FW'2bb‚‡FööÅG—RÓÓÒ&–ÖvR"bbFööÅ&÷f–FW'2ç7F&–Æ—G’’ÇÂ‡FööÅG—RÓÒ&–ÖvR"bbFööÅ&÷f–FW'2æw&÷’’bbÆF—b6Æ74æÖSÒ&W‡Æ÷&R×&÷f–FW"Öæ÷FR"&öÆSÒ'7FGW2#àÐ¢Ç7G&öæsç·FööÅG—RÓÓÒ&–ÖvR"ò$–ÖvRvVæW&F–öâæVVG2&÷f–FW"6WGW"¢$’f–ÆRvVæW&F–öâæVVG2&÷f–FW"6WGW'ÓÂ÷7G&öæsàÐ¢Ç7ãç·FööÅG—RÓÓÒ&–ÖvR"ò$6öæf–wW&R5D$”Ä•E•ô•ô´U’–âF†RW†—7F–ær6W'f–6RFòVæ&ÆR–ÖvRvVæW&F–öââ"¢$6öæf–wW&Ru$õô•ô´U’–âF†RW†—7F–ær6W'f–6RFòVæ&ÆRFö7VÖVçBvVæW&F–öââ'ÓÂ÷7ãàÐ¢ÂöF—cçÐÐ¢ÆF—b6Æ74æÖSÒ&W‡Æ÷&RÖf÷&ÒÖ†VF–ær#ãÆF—cãÇ7â6Æ74æÖSÒ&W–V'&÷r#ä´õÄ’’DôôÃÂ÷7ããÆƒ#ç²‡¶–ÖvS¢$–ÖvRvVæW&F–öâ"ÆFö7ƒ¢$Fö7VÖVçG2"ÇFc¢%Db&W÷'G2"ÇGƒ¢%&W6VçFF–öç2"Ç†Ç7ƒ¢%7&VG6†VWG2'Ò•·FööÅG—U×ÓÂöƒ#ãÂöF—cç·FööÅ&W7VÇBbbÆ'WGFöâG—SÒ&'WGFöâ"6Æ74æÖSÒ&W‡Æ÷&R×FW‡BÖ7F–öâ"öä6Æ–6³×²‚’Óâ²6WEFööÅ&W7VÇB†çVÆÂ“²6WEFööÅ&Wf–Wr†fÇ6R“²×Óä6ÆV"&W7VÇCÂö'WGFöãçÓÂöF—càÐ¢Æf÷&Òöå7V&Ö—C×¶WfVçBÓâfö–BvVæW&FT6öçFVçB†WfVçB—ÓàÐ¢·FööÅG—RÓÒ&–ÖvR"bbÆÆ&VÂ6Æ74æÖSÒ&W‡Æ÷&RÖf–VÆB#ãÇ7ãåF—FÆRÇ6ÖÆÃâ†÷F–öæÂ“Â÷6ÖÆÃãÂ÷7ããÆ–çWB6Æ74æÖSÒ&6†B×6V&6‚"fÇVS×·FööÅF—FÆWÒöä6†ævS×¶WfVçBÓâ6WEFööÅF—FÆR†WfVçBçF&vWBçfÇVR—ÒÖ„ÆVæwFƒ×³cÒÆ6V†öÆFW#Ò$v—fR–÷W"f–ÆRF—FÆR"óãÂöÆ&VÃçÐÐ¢·FööÅG—RÓÓÒ&–ÖvR"bbÆF—b6Æ74æÖSÒ&W‡Æ÷&RÖ–ÖvRÖ÷F–öç2#àÐ¢ÆÆ&VÂ6Æ74æÖSÒ&W‡Æ÷&RÖf–VÆB#ãÇ7ãå7G–ÆSÂ÷7ããÇ6VÆV7B6Æ74æÖSÒ&6†B×6V&6‚"fÇVS×·FööÅ7G–ÆWÒöä6†ævS×¶WfVçBÓâ6WEFööÅ7G–ÆR†WfVçBçF&vWBçfÇVR—ÓãÆ÷F–öâfÇVSÒ"#äWFöÖF–3Âö÷F–öããÆ÷F–öâfÇVSÒ'†÷Föw&†–2#å†÷Föw&†–3Âö÷F–öããÆ÷F–öâfÇVSÒ&F–v—FÂÖ'B#äF–v—FÂ'CÂö÷F–öããÆ÷F–öâfÇVSÒ#6BÖÖöFVÂ#ã4CÂö÷F–öããÆ÷F–öâfÇVSÒ&6–æVÖF–2#ä6–æVÖF–3Âö÷F–öããÆ÷F–öâfÇVSÒ&æ–ÖR#äæ–ÖSÂö÷F–öããÆ÷F–öâfÇVSÒ&—6öÖWG&–2#ä—6öÖWG&–3Âö÷F–öããÆ÷F–öâfÇVSÒ&Æ–æRÖ'B#äÆ–æR'CÂö÷F–öããÂ÷6VÆV7CãÂöÆ&VÃàÐ¢ÆÆ&VÂ6Æ74æÖSÒ&W‡Æ÷&RÖf–VÆB#ãÇ7ãä7V7B&F–óÂ÷7ããÇ6VÆV7B6Æ74æÖSÒ&6†B×6V&6‚"fÇVS×·FööÄ7V7GÒöä6†ævS×¶WfVçBÓâ6WEFööÄ7V7B†WfVçBçF&vWBçfÇVR—Óçµ²#£"Â#c£’"Â#3£""Â#C£R"Â##£2"Â#“£b"Â##£’"Â#S£B%ÒæÖ‡fÇVRÓâÆ÷F–öâ¶W“×·fÇVWÓç·fÇVWÓÂö÷F–öãâ—ÓÂ÷6VÆV7CãÂöÆ&VÃàÐ¢ÆÆ&VÂ6Æ74æÖSÒ&W‡Æ÷&RÖf–VÆB#ãÇ7ãäf–ÆRG—SÂ÷7ããÇ6VÆV7B6Æ74æÖSÒ&6†B×6V&6‚"fÇVS×·FööÄ–ÖvTf÷&ÖGÒöä6†ævS×¶WfVçBÓâ6WEFööÄ–ÖvTf÷&ÖB†WfVçBçF&vWBçfÇVR—ÓãÆ÷F–öâfÇVSÒ'ær#åäsÂö÷F–öããÆ÷F–öâfÇVSÒ&§Vr#ä¥TsÂö÷F–öããÆ÷F–öâfÇVSÒ'vV'#åvV%Âö÷F–öããÂ÷6VÆV7CãÂöÆ&VÃàÐ¢ÂöF—cçÐÐ¢ÆÆ&VÂ6Æ74æÖSÒ&W‡Æ÷&RÖf–VÆB"‡FÖÄf÷#Ò'FööÂ×&ö×B#ãÇ7ãç·FööÅG—RÓÓÒ&–ÖvR"ò$FW67&–&RF†R–ÖvR"¢%v†B6†÷VÆB´õÄ’’7&VFSò'ÓÂ÷7ãàÐ¢ÇFW‡F&V–CÒ'FööÂ×&ö×B"6Æ74æÖSÒ&6†B×6V&6‚"fÇVS×·FööÅ&ö×GÒöä6†ævS×¶WfVçBÓâ6WEFööÅ&ö×B†WfVçBçF&vWBçfÇVR—ÒÖ„ÆVæwFƒ×³ÒÆ6V†öÆFW#×·FööÅG—RÓÓÒ&–ÖvR"ò$FW67&–&RF†R7V&¦V7BÂ6ö×÷6—F–öâÂÆ–v‡F–ærÂæBÖööN(
+b"¢$FW67&–&RF†R6öçFVçBÂVF–Væ6RÂ¶W’ö–çG2ÂæBç’FWF–Ç2Fò–æ6ÇVF^(
+b'ÒóàÐ¢ÂöÆ&VÃàÐ¢ÆF—b6Æ74æÖSÒ&W‡Æ÷&RÖf÷&ÒÖfö÷FW"#ãÇ7ãç·FööÅ&ö×BæÆVæwF‚çFôÆö6ÆU7G&–ær‚—ÒòÃÂ÷7ããÆ'WGFöâ6Æ74æÖSÒ&WF‚×7V&Ö—B"G—SÒ'7V&Ö—B"F—6&ÆVC×²W6W"ÇÂFööÄ'W7’ÇÂFööÅ&ö×BçG&–Ò‚’ÇÂ‡FööÅ&÷f–FW'2òFööÅG—RÓÓÒ&–ÖvR"òFööÅ&÷f–FW'2ç7F&–Æ—G’¢FööÅ&÷f–FW'2æw&÷¢fÇ6R—Óç·FööÄ'W7’ò$7&VF–æ~(
+b"¢FööÅG—RÓÓÒ&–ÖvR"bbFööÅ&W7VÇBò%&VvVæW&FR–ÖvR"¢7&VFRG·FööÅG—RçFõWW$66R‚—ÖÓÂö'WGFöããÂöF—càÐ¢Âöf÷&ÓàÐ¢·FööÄ'W7’bbÇ6Æ74æÖSÒ&W‡Æ÷&R×7FGW2"&öÆSÒ'7FGW2#ä´õÄ’’—27&VF–ær–÷W"·FööÅG—RÓÓÒ&–ÖvR"ò&–ÖvR"¢FööÅG—RÓÓÒ&Fö7‚"ò&Fö7VÖVçBG&gB"¢FööÅG—RçFõWW$66R‚—Þ(
+cÂ÷çÐÐ¢·FööÅ&W7VÇBbbÆF—b6Æ74æÖSÒ&vVæW&FVBÖ–ÖvRÖ6&BW‡Æ÷&R×&W7VÇB#àÐ¢·FööÅG—RÓÓÒ&–ÖvR"bbFööÅ&W7VÇBç&Wf–WuW&ÂbbÆ–Ör6Æ74æÖSÒ&vVæW&FVBÖ–ÖvR×&Wf–Wr"7&3×·FööÅ&W7VÇBç&Wf–WuW&ÇÒÇC×·FööÅ&ö×BÇÂ$’vVæW&FVB–ÖvR'ÒóçÐÐ¢·FööÅG—RÓÓÒ'Fb"bbFööÅ&W7VÇBç&Wf–WuW&ÂbbÆ–g&ÖR6Æ74æÖSÒ&W‡Æ÷&R×Fb×&Wf–Wr"7&3×·FööÅ&W7VÇBç&Wf–WuW&ÇÒF—FÆS×·FööÅ&W7VÇBæf–ÆTæÖWÒóçÐÐ¢·FööÅG—RÓÓÒ&Fö7‚"bbFööÅ&W7VÇBæ6öçFVçBÓÒVæFVf–æVBbbÃàÐ¢ÆF—b6Æ74æÖSÒ&W‡Æ÷&R×&W7VÇB×F'2#ãÆ'WGFöâG—SÒ&'WGFöâ"6Æ74æÖS×²FööÅ&Wf–Wrò&7F—fR"¢"'Òöä6Æ–6³×²‚’Óâ6WEFööÅ&Wf–Wr†fÇ6R—ÓäVF—CÂö'WGFöããÆ'WGFöâG—SÒ&'WGFöâ"6Æ74æÖS×·FööÅ&Wf–Wrò&7F—fR"¢"'Òöä6Æ–6³×²‚’Óâ6WEFööÅ&Wf–Wr‡G'VR—Óå&Wf–WsÂö'WGFöããÂöF—càÐ¢·FööÅ&Wf–WròÆF—b6Æ74æÖSÒ&W‡Æ÷&RÖFö7VÖVçB×&Wf–Wr#ãÅ&V7DÖ&¶F÷vâ&VÖ&µÇVv–ç3×µ·&VÖ&´vfÕ×Óç·FööÅ&W7VÇBæ6öçFVçGÓÂõ&V7DÖ&¶F÷vããÂöF—câ¢ÇFW‡F&V&–ÖÆ&VÃÒ$VF—BFö7VÖVçB6öçFVçB"6Æ74æÖSÒ&W‡Æ÷&RÖFö7VÖVçBÖVF—F÷""fÇVS×·FööÅ&W7VÇBæ6öçFVçGÒöä6†ævS×¶WfVçBÓâ6WEFööÅ&W7VÇB‡&Wf–÷W2Óâ&Wf–÷W2ò²ââç&Wf–÷W2Â6öçFVçC¢WfVçBçF&vWBçfÇVRÒ¢&Wf–÷W2—ÒóçÐÐ¢ÆF—b6Æ74æÖSÒ&W‡Æ÷&RÖW‡÷'BÖ7F–öç2#ç²…²&Fö7‚"Â'Fb"Â'G‡B%Ò26öç7B’æÖ†f÷&ÖBÓâÆ'WGFöâ¶W“×¶f÷&ÖGÒG—SÒ&'WGFöâ"öä6Æ–6³×²‚’Óâfö–BW‡÷'DFö7VÖVçB†f÷&ÖB—ÓãÄF÷væÆöB6—¦S×³WÒóâF÷væÆöB¶f÷&ÖBçFõWW$66R‚—ÓÂö'WGFöãâ—ÓÆ'WGFöâG—SÒ&'WGFöâ"öä6Æ–6³×²‚’Óâfö–B6÷•FW‡B‡FööÅ&W7VÇBæ6öçFVçBÇÂ""—ÓãÄ6÷’6—¦S×³WÒóâ6÷“Âö'WGFöããÂöF—càÐ¢ÂóçÐÐ¢ÆF—b6Æ74æÖSÒ&vVæW&FVBÖ–ÖvR×FööÆ&"#ãÇ7ãç·FööÅ&W7VÇBæf–ÆTæÖWÓÂ÷7ããÆF—cç·FööÅG—RÓÒ&Fö7‚"bbFööÅ&W7VÇBç&Wf–WuW&ÂbbÆ‡&Vc×·FööÅ&W7VÇBç&Wf–WuW&ÇÒF÷væÆöC×·FööÅ&W7VÇBæf–ÆTæÖWÒ&–ÖÆ&VÃÒ$F÷væÆöBvVæW&FVBf–ÆR#ãÄF÷væÆöB6—¦S×³wÒóâF÷væÆöCÂöçÓÂöF—cãÂöF—càÐ¢ÂöF—cçÐÐ¢·FööÅG—RÓÓÒ&–ÖvR"bb–ÖvT†—7F÷'’æÆVæwF‚âbbÆF—b6Æ74æÖSÒ&W‡Æ÷&RÖ†—7F÷'’#ãÇ7G&öæså&V6VçB–ÖvW3Â÷7G&öæsãÆF—cç¶–ÖvT†—7F÷'’æÖ†—FVÒÓâÆ'WGFöâ¶W“×¶—FVÒæf–ÆTæÖWÒG—SÒ&'WGFöâ"F—FÆS×¶—FVÒç&ö×GÒöä6Æ–6³×²‚’Óâ²6WEFööÅ&W7VÇB‡²f–ÆTæÖS¢—FVÒæf–ÆTæÖRÂ&Wf–WuW&Ã¢—FVÒç&Wf–WuW&ÂÒ“²6WEFööÅ&ö×B†—FVÒç&ö×B“²×ÓãÆ–Ör7&3×¶—FVÒç&Wf–WuW&ÇÒÇCÒ""óãÇ7ãç¶—FVÒç&ö×GÓÂ÷7ããÂö'WGFöãâ—ÓÂöF—cãÂöF—cçÐÐ¢ÂöF—càÐ¢Â÷6V7F–öãçÐÐ Ð¢·6V7F–öâÓÓÒ$Æ–'&'’"bbÇ6V7F–öâ6Æ74æÖSÒ'vR#àÐ¢Æ†VFW"6Æ74æÖSÒ'vRÖ†VF–ær#ãÆƒäÆ–'&'“ÂöƒãÇå–÷W"WÆöFVBæBvVæW&FVBf–ÆW2ãÂ÷ãÂö†VFW#àÐ¢¶Æ–'&'”'W7’òÇ&öÆSÒ'7FGW2#äÆöF–ær–÷W"f–ÆW>(
+cÂ÷â¢Æ–'&'”f–ÆW2æÆVæwF‚òÆF—b6Æ74æÖSÒ'FööÂÖw&–B#àÐ¢¶Æ–'&'”f–ÆW2æÖ†f–ÆRÓâÆ'F–6ÆR6Æ74æÖSÒ'FööÂÖ6&BÆ–'&'’Ö6&B"¶W“×¶f–ÆRæf–ÆTæÖWÓàÐ¢Æ‡&Vc×¶f–ÆRçW&ÇÒF&vWCÒ%ö&Ææ²"&VÃÒ&æ÷&VfW'&W"#ãÇ7â6Æ74æÖSÒ'FööÂÖ–6öâ#ãÄf–ÆUFW‡B6—¦S×³#ÒóãÂ÷7ããÆƒ3ç¶f–ÆRæf–ÆTæÖWÓÂöƒ3ãÇç¶f–ÆRçG—WÒ+r²†f–ÆRç6—¦Rò#B’çFôf—†VBƒ—Ò´#Â÷ãÂöàÐ¢ÆF—b6Æ74æÖSÒ&Æ–'&'’Ö7F–öç2#ãÆ‡&Vc×¶f–ÆRçW&ÇÒF÷væÆöC×¶f–ÆRæf–ÆTæÖWÓäF÷væÆöCÂöãÆ'WGFöâöä6Æ–6³×²‚’Óâfö–B&VÖ÷fTÆ–'&'”f–ÆR†f–ÆRæf–ÆTæÖR—ÓäFVÆWFSÂö'WGFöããÂöF—càÐ¢Âö'F–6ÆSâ—ÐÐ¢ÂöF—câ¢ÆF—b6Æ74æÖSÒ&Æ–'&'’ÖV×G’#ãÄÆ–'&'’6—¦S×³3ÒóãÆƒ3å–÷W"Æ–'&'’—2V×G“Âöƒ3ãÇävVæW&FVBæBWÆöFVBf–ÆW2v–ÆÂV"†W&RãÂ÷ãÂöF—cçÐÐ¢Â÷6V7F–öãçÐÐ Ð¢·6V7F–öâÓÓÒ%6WGF–æw2"bbÇ6V7F–öâ6Æ74æÖSÒ'6WGF–æw2×vRÖÖöFW&â#àÐ¢Æ†VFW"6Æ74æÖSÒ'6WGF–æw2Ö†VFW"ÖÖöFW&â#ãÆ'WGFöâ6Æ74æÖSÒ'6WGF–æw2Ö&6²"&–ÖÆ&VÃÒ$&6²Fò6†B"öä6Æ–6³×²‚’Óâ6†ö÷6U6V7F–öâ‚$6†B"—ÓãÄ'&÷tÆVgB6—¦S×³—ÒóãÂö'WGFöããÆƒå6WGF–æw3ÂöƒãÅ6WGF–æw26—¦S×³—ÒóãÂö†VFW#àÐ¢²6WGF–æw4FWF–ÂòÆF—b6Æ74æÖSÒ'6WGF–æw2ÖÖö&–ÆRÖ&öG’#àÐ¢Æ'WGFöâ6Æ74æÖSÒ'6WGF–æw2Ö7W7FöÖ—¦R"öä6Æ–6³×²‚’Óâ6WE6WGF–æw4FWF–Â‚%W'6öæÆ—¦F–öâ"—ÓãÇ7â6Æ74æÖSÒ'6WGF–æw2Öv–gB#ãÅ7&¶ÆW26—¦S×³—ÒóãÂ÷7ããÆF—cãÇ7G&öæsåW'6öæÆ—¦F–öãÂ÷7G&öæsãÇ7ãä7W7FöÖ—¦R†÷r´õÄ’’v÷&·2f÷"–÷SÂ÷7ããÂöF—cãÄ6†Wg&öå&–v‡B6—¦S×³‡ÒóãÂö'WGFöãàÐ¢ÆF—b6Æ74æÖSÒ'6WGF–æw2ÖÖ–âÖ6&B#àÐ¢Æ'WGFöâ6Æ74æÖSÒ'6WGF–æw2ÖæWWG&Â×&÷rÖ'WGFöâ"öä6Æ–6³×²‚’Óâ6WE6WGF–æw4FWF–Â‚$V&æ6R"—ÓãÅ7Vâ6—¦S×³‡ÒóãÇ7ãäV&æ6SÂ÷7ããÄ6†Wg&öå&–v‡B6—¦S×³wÒóãÂö'WGFöãàÐ¢Æ'WGFöâ6Æ74æÖSÒ'6WGF–æw2ÖæWWG&Â×&÷rÖ'WGFöâ"öä6Æ–6³×²‚’Óâ6WE6WGF–æw4FWF–Â‚$FFbÖVÖ÷'’"—ÓãÄ'&–â6—¦S×³‡ÒóãÇ7ãäFFf×²ÖVÖ÷'“Â÷7ããÄ6†Wg&öå&–v‡B6—¦S×³wÒóãÂö'WGFöãàÐ¢Æ'WGFöâ6Æ74æÖSÒ'6WGF–æw2ÖæWWG&Â×&÷rÖ'WGFöâ"öä6Æ–6³×²‚’Óâ6WE6WGF–æw4FWF–Â‚$&÷WB´õÄ’’"—ÓãÄ6—&6ÆT†VÇ6—¦S×³‡ÒóãÇ7ãä&÷WB´õÄ’“Â÷7ããÄ6†Wg&öå&–v‡B6—¦S×³wÒóãÂö'WGFöãàÐ¢Æ'WGFöâ6Æ74æÖSÒ'6WGF–æw2ÖæWWG&Â×&÷rÖ'WGFöâ"öä6Æ–6³×²‚’ÓâW6W"òfö–B6–vä÷WB‚’¢6WDWF„÷Vâ‡G'VR—Óç·W6W"òÄÆöt÷WB6—¦S×³‡Òóâ¢ÄÆöt–â6—¦S×³‡ÒóçÓÇ7ãç·W6W"ò%6–vâ÷WB"¢%6–vâ–â÷"7&VFR66÷VçB'ÓÂ÷7ããÄ6†Wg&öå&–v‡B6—¦S×³wÒóãÂö'WGFöãàÐ¢·W6W#òç&öÆRÓÓÒ&÷væW""bbÆ'WGFöâ6Æ74æÖSÒ'6WGF–æw2ÖæWWG&Â×&÷rÖ'WGFöâ"öä6Æ–6³×²‚’Óâfö–BÆöDFÖ–â‚—ÓãÅ6†–VÆB6—¦S×³‡ÒóãÇ7ãäFÖ–â7FGW3Â÷7ããÄ6†Wg&öå&–v‡B6—¦S×³wÒóãÂö'WGFöãçÐÐ¢ÂöF—càÐ¢ÂöF—câ¢ÆF—b6Æ74æÖSÒ'6WGF–æw2ÖFWF–Â#àÐ¢Æ'WGFöâ6Æ74æÖSÒ'6WGF–æw2ÖFWF–ÂÖ&6²"öä6Æ–6³×²‚’Óâ6WE6WGF–æw4FWF–Â‚""—ÓãÄ6†Wg&öäÆVgB6—¦S×³wÒóâ6WGF–æw3Âö'WGFöããÆƒ#ç·6WGF–æw4FWF–ÇÓÂöƒ#àÐ¢·6WGF–æw4FWF–ÂÓÓÒ$V&æ6R"bbÆF—b6Æ74æÖSÒ'6WGF–æw2Ö6&BÖæWWG&Â#àÐ¢ÆF—b6Æ74æÖSÒ'6WGF–æw2ÖæWWG&Â×&÷r#ãÆF—cãÇ7G&öæsåF†VÖSÂ÷7G&öæsãÇ7ãä6†ö÷6RÆ–v‡B÷"F&²V&æ6SÂ÷7ããÂöF—cãÆ'WGFöâ6Æ74æÖS×¶7v—F6‚G¶F&²ò'FövvÆRÖ7F—fR"¢"'ÖÒ&–ÖÆ&VÃ×¶F&²ò%W6RÆ–v‡BF†VÖR"¢%W6RF&²F†VÖR'Ò&–×&W76VC×¶F&·Òöä6Æ–6³×²‚’Óâ6WDF&²‡fÇVRÓâfÇVR—ÓãÇ7â6Æ74æÖS×¶F&²ò&öâ"¢"'ÒóãÂö'WGFöããÂöF—càÐ¢ÆF—b6Æ74æÖSÒ'6WGF–æw2ÖæWWG&Â×&÷r#ãÆF—cãÇ7G&öæså&VGV6RÖ÷F–öãÂ÷7G&öæsãÇ7ãåGW&âöfb÷&"æB6&Bæ–ÖF–öç3Â÷7ããÂöF—cãÆ'WGFöâ6Æ74æÖS×¶7v—F6‚G·&VGV6TVffV7G2ò'FövvÆRÖ7F—fR"¢"'ÖÒ&–ÖÆ&VÃÒ%FövvÆR&VGV6VBf—7VÂVffV7G2"&–×&W76VC×·&VGV6TVffV7G7Òöä6Æ–6³×²‚’Óâ6WE&VGV6TVffV7G2‡fÇVRÓâfÇVR—ÓãÇ7â6Æ74æÖS×·&VGV6TVffV7G2ò&öâ"¢"'ÒóãÂö'WGFöããÂöF—càÐ¢ÂöF—cçÐÐ¢·6WGF–æw4FWF–ÂÓÓÒ%W'6öæÆ—¦F–öâ"bbÆF—b6Æ74æÖSÒ'6WGF–æw2Ö6&BÖæWWG&Â#àÐ¢ÆF—b6Æ74æÖSÒ'6WGF–æw2ÖæWWG&Â×&÷r#ãÆF—cãÇ7G&öæsä–×&÷fR&W7öç6W3Â÷7G&öæsãÇ7ãå&VÖVÖ&W"6÷'&V7F–öç2æB&VfW&Væ6W2f÷"F†—266÷VçCÂ÷7ããÂöF—cãÆ'WGFöâ6Æ74æÖS×¶7v—F6‚G·&VfW&Væ6W2æÆV&æ–ærò'FövvÆRÖ7F—fR"¢"'ÖÒ&–ÖÆ&VÃÒ%FövvÆR&W7öç6RW'6öæÆ—¦F–öâ"&–×&W76VC×·&VfW&Væ6W2æÆV&æ–æwÒöä6Æ–6³×²‚’Óâfö–BWFFU&VfW&Væ6W2‡²ÆV&æ–æs¢&VfW&Væ6W2æÆV&æ–ærÒ—ÓãÇ7â6Æ74æÖS×·&VfW&Væ6W2æÆV&æ–ærò&öâ"¢"'ÒóãÂö'WGFöããÂöF—càÐ¢ÆF—b6Æ74æÖSÒ'6WGF–æw2ÖæWWG&Â×&÷r#ãÆF—cãÇ7G&öæsåW6R7B6öçfW'6F–öç3Â÷7G&öæsãÇ7ãäÆÆ÷r´õÄ’’Fò&V6ÆÂ&VÆWfçB6†G2v†Vâ6¶VCÂ÷7ããÂöF—cãÆ'WGFöâ6Æ74æÖS×¶7v—F6‚G·&VfW&Væ6W2æ7&÷746†Bò'FövvÆRÖ7F—fR"¢"'ÖÒ&–ÖÆ&VÃÒ%FövvÆR7&÷72Ö6†BÖVÖ÷'’"&–×&W76VC×·&VfW&Væ6W2æ7&÷746†GÒöä6Æ–6³×²‚’Óâfö–BWFFU&VfW&Væ6W2‡²7&÷746†C¢&VfW&Væ6W2æ7&÷746†BÒ—ÓãÇ7â6Æ74æÖS×·&VfW&Væ6W2æ7&÷746†Bò&öâ"¢"'ÒóãÂö'WGFöããÂöF—càÐ¢ÂöF—cçÐÐ¢·6WGF–æw4FWF–ÂÓÓÒ$FFbÖVÖ÷'’"bbÆF—b6Æ74æÖSÒ'6WGF–æw2Ö6&BÖæWWG&Â#àÐ¢ÆF—b6Æ74æÖSÒ'6WGF–æw2ÖæWWG&Â×&÷r#ãÆF—cãÇ7G&öæså6fVBÖVÖ÷'“Â÷7G&öæsãÇ7ãå&Wf–Wr÷"&VÖ÷fR6fVB&VfW&Væ6W2æB7VÖÖ&–W3Â÷7ããÂöF—cãÆ'WGFöâ6Æ74æÖSÒ'6WGF–æw2Ö7F–öâ"öä6Æ–6³×²‚’Óâfö–B÷VäÖVÖ÷'”ÖævW"‚—ÓäÖævSÂö'WGFöããÂöF—càÐ¢ÆF—b6Æ74æÖSÒ'6WGF–æw2ÖæWWG&Â×&÷r#ãÆF—cãÇ7G&öæsäW‡÷'B×’FFÂ÷7G&öæsãÇ7ãäF÷væÆöBÖVÖ÷'’Â&VfW&Væ6W2ÂæB6öçfW'6F–öç3Â÷7ããÂöF—cãÆ'WGFöâ6Æ74æÖSÒ'6WGF–æw2Ö7F–öâ"öä6Æ–6³×²‚’Óâfö–BW‡÷'DFF‚—ÒF—6&ÆVC×²W6W'ÓäW‡÷'CÂö'WGFöããÂöF—càÐ¢ÂöF—cçÐÐ¢·6WGF–æw4FWF–ÂÓÓÒ$66÷VçB"bbÆF—b6Æ74æÖSÒ'6WGF–æw2Ö6&BÖæWWG&Â#ãÆF—b6Æ74æÖSÒ'6WGF–æw2ÖæWWG&Â×&÷r#ãÆF—cãÇ7G&öæsç·W6W#òæVÖ–ÂÇÂ$wVW7B6W76–öâ'ÓÂ÷7G&öæsãÇ7ãç·W6W"ò%–÷W"66÷VçB—26–væVB–â"¢%6–vâ–âFò7–æ2–÷W"†—7F÷'’'ÓÂ÷7ããÂöF—cãÆ'WGFöâ6Æ74æÖSÒ'6WGF–æw2Ö7F–öâ"öä6Æ–6³×²‚’ÓâW6W"òfö–B6–vä÷WB‚’¢6WDWF„÷Vâ‡G'VR—Óç·W6W"ò%6–vâ÷WB"¢%6–vâ–â'ÓÂö'WGFöããÂöF—cãÂöF—cçÐÐ¢·6WGF–æw4FWF–ÂÓÓÒ$&÷WB´õÄ’’"bbÆF—b6Æ74æÖSÒ'6WGF–æw2Ö6&BÖæWWG&Â&÷WBÖ'&æB#ãÇ7â6Æ74æÖSÒ&'&æBÖÖ&²#ãÆ–Ör7&3Ò"öÆövòçær"ÇCÒ$´õÄ’’"óãÂ÷7ããÆF—cãÇ7G&öæsä´õÄ’“Â÷7G&öæsãÇ7ãå–÷W"W'6öæÂ’v÷&·76SÂ÷7ããÂöF—cãÂöF—cçÐÐ¢ÂöF—cçÐÐ¢ÆF—b6Æ74æÖSÒ'6WGF–æw2×6V&6‚×w&#ãÅ6V&6‚6—¦S×³wÒóãÆ–çWBfÇVS×·6WGF–æw56V&6‡Òöä6†ævS×¶WfVçBÓâ6WE6WGF–æw56V&6‚†WfVçBçF&vWBçfÇVR—ÒÆ6V†öÆFW#Ò%6V&6‚6WGF–æw2"&–ÖÆ&VÃÒ%6V&6‚6WGF–æw2"óàÐ¢·6WGF–æw56V&6‚bbÆF—b6Æ74æÖSÒ'6WGF–æw2×6V&6‚×&W7VÇG2"&öÆSÒ&Æ—7F&÷‚#ç·6WGF–æw4Æ–æ·2æÖ†—FVÒÓâÆ'WGFöâ¶W“×¶—FV×Òöä6Æ–6³×²‚’Óâ²6WE6WGF–æw4FWF–Â†—FVÒ“²6WE6WGF–æw56V&6‚‚""“²×Óç¶—FV×ÓÂö'WGFöãâ—×²6WGF–æw4Æ–æ·2æÆVæwF‚bbÇ7ãäæòÖF6†–ær6WGF–æw2ãÂ÷7ãçÓÂöF—cçÐÐ¢ÂöF—càÐ¢Â÷6V7F–öãçÐÐ Ð¢·6V7F–öâÓÓÒ$FÖ–â"bbÇ6V7F–öâ6Æ74æÖSÒ'vR#ãÆ†VFW"6Æ74æÖSÒ'vRÖ†VF–ær#ãÆƒäFÖ–âF6†&ö&CÂöƒãÇå&÷f–FW"6öæf–wW&F–öâæBW6W"ÖævVÖVçBf÷"F†—2FWÆ÷–ÖVçBãÂ÷ãÂö†VFW#àÐ¢¶FÖ–ä'W7’òÇ&öÆSÒ'7FGW2#ä6†V6¶–ærFÖ–â7FGW>(
+cÂ÷â¢FÖ–å7FGW2òÃàÐ¢ÆF—b6Æ74æÖSÒ'6WGF–æw2Ö6&B#àÐ¢Æƒ"7G–ÆS×·²föçE6—¦S¢#ã&VÒ"ÂÖ&v–ä&÷GFöÓ¢"×Óå&÷f–FW"7FGW3Âöƒ#àÐ¢´ö&¦V7BæVçG&–W2†FÖ–å7FGW2’æÖ‚…¶¶W’ÂVæ&ÆVEÒ’ÓâÆF—b6Æ74æÖSÒ'6WGF–æw2×&÷r"¶W“×¶¶W—ÓãÆF—cãÇ7G&öæsç¶¶W’çFõWW$66R‚—ÓÂ÷7G&öæsãÇ7ãç¶Væ&ÆVBò$6öæf–wW&VB"¢$æ÷B6öæf–wW&VB'ÓÂ÷7ããÂöF—cãÇ7ãç¶Væ&ÆVBò%&VG’"¢%Væf–Æ&ÆR'ÓÂ÷7ããÂöF—câ—ÐÐ¢ÂöF—càÐ¢¶FÖ–åW6W'2æÆVæwF‚âbbÆF—b6Æ74æÖSÒ'6WGF–æw2Ö6&B"7G–ÆS×·²Ö&v–åF÷¢b×ÓàÐ¢Æƒ"7G–ÆS×·²föçE6—¦S¢#ã&VÒ"ÂÖ&v–ä&÷GFöÓ¢"×Óå&Vv—7FW&VBW6W'2‡¶FÖ–åW6W'2æÆVæwF‡Ò“Âöƒ#àÐ¢¶FÖ–åW6W'2æÖ‡RÓâÆF—b6Æ74æÖSÒ'6WGF–æw2×&÷r"¶W“×·Ræ–GÓãÆF—cãÇ7G&öæsç·RææÖRòG·RææÖWÒ‚G·RæVÖ–ÇÒ–¢RæVÖ–ÇÓÂ÷7G&öæsãÇ7ãå&öÆS¢·Rç&öÆWÓÂ÷7ããÂöF—cãÇ7ãç¶æWrFFR‡Ræ7&VFVDB’çFôÆö6ÆTFFU7G&–ær‚—ÓÂ÷7ããÂöF—câ—ÐÐ¢ÂöF—cçÐÐ¢Âóâ¢ÇäFÖ–â7FGW2—2Væf–Æ&ÆRãÂ÷çÐÐ¢Â÷6V7F–öãçÐÐ¢ÂöÖ–ãàÐ Ð¢¶æ÷F–6RbbÆF—b6Æ74æÖSÒ&fVVF&6²×Fö7B"&öÆSÒ'7FGW2#ç¶æ÷F–6WÓÂöF—cçÐÐ Ð¢¶WF„÷VâbbÆF—b6Æ74æÖSÒ&F–ÆörÖ&6¶G&÷"öäÖ÷W6TF÷vã×¶WfVçBÓâ²–b†WfVçBçF&vWBÓÓÒWfVçBæ7W'&VçEF&vWB’6WDWF„÷Vâ†fÇ6R“²×ÓàÐ¢Ç6V7F–öâ6Æ74æÖSÒ&WF‚ÖF–Æör"&öÆSÒ&F–Æör"&–ÖÖöFÃÒ'G'VR"&–ÖÆ&VÆÆVF'“Ò&WF‚×F—FÆR#àÐ¢Æ'WGFöâ6Æ74æÖSÒ&F–ÆörÖ6Æ÷6R"&–ÖÆ&VÃÒ$6Æ÷6R6–vâ–â"öä6Æ–6³×²‚’Óâ6WDWF„÷Vâ†fÇ6R—ÓãÅ‚6—¦S×³—ÒóãÂö'WGFöãàÐ¢ÆF—b6Æ74æÖSÒ&WF‚Ö'&æB#ä´õÄ’Ç7ãä“Â÷7ããÂöF—cãÆƒ–CÒ&WF‚×F—FÆR#ç·&Vv—7FW&–ærò$7&VFR–÷W"66÷VçB"¢%vVÆ6öÖR&6²'ÓÂöƒàÐ¢Çå6–vâ–âFò7–æ26öçfW'6F–öç2æBÖævR&—fFRÖVÖ÷'’ãÂ÷àÐ¢Æf÷&Òöå7V&Ö—C×¶WfVçBÓâfö–B7V&Ö—DWF‚†WfVçB—ÓàÐ¢·&Vv—7FW&–ærbbÆÆ&VÃäæÖSÆ–çWBWFô6ö×ÆWFSÒ&æÖR"fÇVS×¶WF„æÖWÒöä6†ævS×¶WfVçBÓâ6WDWF„æÖR†WfVçBçF&vWBçfÇVR—Ò&WV—&VBÖ„ÆVæwFƒ×³ÒóãÂöÆ&VÃçÐÐ¢ÆÆ&VÃäVÖ–ÃÆ–çWBG—SÒ&VÖ–Â"WFô6ö×ÆWFSÒ&VÖ–Â"fÇVS×¶WF„VÖ–ÇÒöä6†ævS×¶WfVçBÓâ6WDWF„VÖ–Â†WfVçBçF&vWBçfÇVR—Ò&WV—&VBóãÂöÆ&VÃàÐ¢ÆÆ&VÃå77v÷&CÆ–çWBG—SÒ'77v÷&B"WFô6ö×ÆWFS×·&Vv—7FW&–ærò&æWr×77v÷&B"¢&7W'&VçB×77v÷&B'ÒfÇVS×¶WF…77v÷&GÒöä6†ævS×¶WfVçBÓâ6WDWF…77v÷&B†WfVçBçF&vWBçfÇVR—Ò&WV—&VBÖ–äÆVæwFƒ×·&Vv—7FW&–ærò"¢ÒóãÂöÆ&VÃàÐ¢¶WF„W'&÷"bbÇ6Æ74æÖSÒ&WF‚ÖW'&÷""&öÆSÒ&ÆW'B#ç¶WF„W'&÷'ÓÂ÷çÐÐ¢Æ'WGFöâ6Æ74æÖSÒ&WF‚×7V&Ö—B"G—SÒ'7V&Ö—B"F—6&ÆVC×¶WF„'W7—Óç¶WF„'W7’ò%ÆV6Rv—N(
+b"¢&Vv—7FW&–ærò$7&VFR66÷VçB"¢%6–vâ–â'ÓÂö'WGFöãàÐ¢Âöf÷&ÓàÐ¢Æ'WGFöâ6Æ74æÖSÒ&WF‚ÖÖöFR×FövvÆR"öä6Æ–6³×²‚’Óâ²6WE&Vv—7FW&–ær‡fÇVRÓâfÇVR“²6WDWF„W'&÷"‚""“²×Óç·&Vv—7FW&–ærò$Ç&VG’†fRâ66÷VçCò6–vâ–â"¢$æWrFò´õÄ’“ò7&VFRâ66÷VçB'ÓÂö'WGFöãàÐ¢Ç6Æ74æÖSÒ&öWF‚Öæ÷FR#äVÖ–ÂæB77v÷&B6–vâÖ–â&Rf–Æ&ÆRâvöövÆRæBv—D‡V"6–vâÖ–â&Ræ÷B6öæf–wW&VBãÂ÷àÐ¢Â÷6V7F–öãàÐ¢ÂöF—cçÐÐ Ð¢¶ÖVÖ÷'”÷VâbbÆF—b6Æ74æÖSÒ&F–ÆörÖ&6¶G&÷"öäÖ÷W6TF÷vã×¶WfVçBÓâ²–b†WfVçBçF&vWBÓÓÒWfVçBæ7W'&VçEF&vWB’6WDÖVÖ÷'”÷Vâ†fÇ6R“²×ÓàÐ¢Ç6V7F–öâ6Æ74æÖSÒ&ÖVÖ÷'’ÖF–Æör"&öÆSÒ&F–Æör"&–ÖÖöFÃÒ'G'VR"&–ÖÆ&VÆÆVF'“Ò&ÖVÖ÷'’×F—FÆR#àÐ¢Æ'WGFöâ6Æ74æÖSÒ&F–ÆörÖ6Æ÷6R"&–ÖÆ&VÃÒ$6Æ÷6RÖVÖ÷'’ÖævW""öä6Æ–6³×²‚’Óâ6WDÖVÖ÷'”÷Vâ†fÇ6R—ÓãÅ‚6—¦S×³—ÒóãÂö'WGFöãàÐ¢Æ†VFW#ãÆƒ"–CÒ&ÖVÖ÷'’×F—FÆR#äÖVÖ÷'’f×²ÆV&æ–æsÂöƒ#ãÇå&Wf–WræB6öçG&öÂ–æf÷&ÖF–öâW6VBFòW'6öæÆ—¦R–÷W"6öçfW'6F–öç2ãÂ÷ãÂö†VFW#àÐ¢ÆF—b6Æ74æÖSÒ&ÆV&æ–ærÖF6†&ö&B#àÐ¢ÆF—cãÇ7G&öæsç¶ÖVÖ÷'•7FG2æÖVÖ÷'”6÷VçGÓÂ÷7G&öæsãÇ7ãå6fVBÖVÖ÷&–W3Â÷7ããÂöF—cãÆF—cãÇ7G&öæsç¶ÖVÖ÷'•7FG2ç&ö¦V7D6÷VçGÓÂ÷7G&öæsãÇ7ãå&ö¦V7BÖVÖ÷&–W3Â÷7ããÂöF—càÐ¢ÆF—cãÇ7G&öæsç¶ÖVÖ÷'•7FG2ç7VÖÖ'”6÷VçGÓÂ÷7G&öæsãÇ7ãä6†B7VÖÖ&–W3Â÷7ããÂöF—cãÆF—cãÇ7G&öæsç¶ÖVÖ÷'•7FG2æfVVF&6²æ†VÇgVÂÇÂÓÂ÷7G&öæsãÇ7ãä†VÇgVÂ&F–æw3Â÷7ããÂöF—càÐ¢ÂöF—càÐ¢Æf÷&Ò6Æ74æÖSÒ&ÖVÖ÷'’×6V&6‚"öå7V&Ö—C×¶WfVçBÓâfö–B6V&6…7D6†G2†WfVçB—ÓãÆ–çWB6Æ74æÖSÒ&6†B×6V&6‚"fÇVS×¶ÖVÖ÷'•VW'—Òöä6†ævS×¶WfVçBÓâ6WDÖVÖ÷'•VW'’†WfVçBçF&vWBçfÇVR—ÒÆ6V†öÆFW#Ò%6V&6‚7B6öçfW'6F–öç>(
+b"&–ÖÆ&VÃÒ%6V&6‚7B6öçfW'6F–öç2"óãÆ'WGFöâ6Æ74æÖSÒ'6WGF–æw2Ö7F–öâ"G—SÒ'7V&Ö—B#å6V&6ƒÂö'WGFöããÂöf÷&ÓàÐ¢²ÖVÖ÷'•&W7VÇG2æÆVæwF‚bbÆF—b6Æ74æÖSÒ'6V&6‚×&W7VÇG2#ç¶ÖVÖ÷'•&W7VÇG2æÖ‡&W7VÇBÓâÆ'WGFöâ¶W“×·&W7VÇBæ6öçfW'6F–öä–GÒöä6Æ–6³×²‚’Óâ°Ð¢6öç7B6öçfW'6F–öâÒ6öçfW'6F–öç2æf–æB†—FVÒÓâ—FVÒæ–BÓÓÒ&W7VÇBæ6öçfW'6F–öä–B“°Ð¢–b†6öçfW'6F–öâ’²6VÆV7D6öçfW'6F–öâ†6öçfW'6F–öâ“²6WDÖVÖ÷'”÷Vâ†fÇ6R“²ÐÐ¢VÇ6R6WDæ÷F–6R‚%F†B6öçfW'6F–öâ—2æ÷B–âF†R7W'&VçFÇ’ÆöFVB†—7F÷'’â"“°Ð¢×ÓãÇ7G&öæsç·&W7VÇBçF—FÆWÓÂ÷7G&öæsãÇ7ãç·&W7VÇBç7VÖÖ'’ÇÂæWrFFR‡&W7VÇBçWFFVDB’çFôÆö6ÆU7G&–ær‚—ÓÂ÷7ããÂö'WGFöãâ—ÓÂöF—cçÐÐ¢¶ÖVÖ÷&–W2æÆVæwF‚òÆF—b6Æ74æÖSÒ&ÖVÖ÷'’ÖÆ—7B#ç¶ÖVÖ÷&–W2æÖ†ÖVÖ÷'’ÓâÆ'F–6ÆR6Æ74æÖSÒ&ÖVÖ÷'’Ö—FVÒ"¶W“×¶ÖVÖ÷'’æ–GÓàÐ¢ÆF—cãÇ7â6Æ74æÖSÒ&ÖVÖ÷'’Ö6FVv÷'’#ç¶ÖVÖ÷'’æ6FVv÷'—ÓÂ÷7ãç¶VF—F–ætÖVÖ÷'”–BÓÓÒÖVÖ÷'’æ–@Ð¢òÆ–çWB6Æ74æÖSÒ&6†B×6V&6‚"fÇVS×¶ÖVÖ÷'”G&gGÒöä6†ævS×¶WfVçBÓâ6WDÖVÖ÷'”G&gB†WfVçBçF&vWBçfÇVR—Ò&–ÖÆ&VÃÒ$VF—B6fVBÖVÖ÷'’"Ö„ÆVæwFƒ×³SÒóàÐ¢¢Çç¶ÖVÖ÷'’æ6öçFVçGÓÂ÷çÓÇF–ÖRFFUF–ÖS×¶ÖVÖ÷'’çWFFVDGÓç¶æWrFFR†ÖVÖ÷'’çWFFVDB’çFôÆö6ÆTFFU7G&–ær‚—ÓÂ÷F–ÖSãÂöF—càÐ¢ÆF—b6Æ74æÖSÒ&ÖVÖ÷'’Ö—FVÒÖ7F–öç2#ç¶VF—F–ætÖVÖ÷'”–BÓÓÒÖVÖ÷'’æ–@Ð¢òÃãÆ'WGFöâöä6Æ–6³×²‚’Óâfö–BVF—DÖVÖ÷'’†ÖVÖ÷'’æ–B—Óå6fSÂö'WGFöããÆ'WGFöâöä6Æ–6³×²‚’Óâ6WDVF—F–ætÖVÖ÷'”–B†çVÆÂ—Óä6æ6VÃÂö'WGFöããÂóàÐ¢¢ÃãÆ'WGFöâöä6Æ–6³×²‚’Óâ²6WDVF—F–ætÖVÖ÷'”–B†ÖVÖ÷'’æ–B“²6WDÖVÖ÷'”G&gB†ÖVÖ÷'’æ6öçFVçB“²×ÓäVF—CÂö'WGFöããÆ'WGFöâ6Æ74æÖSÒ&FævW""&–ÖÆ&VÃÒ$FVÆWFRÖVÖ÷'’"öä6Æ–6³×²‚’Óâfö–BFVÆWFTÖVÖ÷'’†ÖVÖ÷'’æ–B—ÓãÅG&6ƒ"6—¦S×³WÒóãÂö'WGFöããÂóçÓÂöF—càÐ¢Âö'F–6ÆSâ—ÓÂöF—câ¢ÆF—b6Æ74æÖSÒ&ÖVÖ÷'’ÖV×G’#äæò6fVBÖVÖ÷&–W2–WBâW'6öæÆ—¦F–öâöæÇ’W6W2–æf÷&ÖF–öâg&öÒ–÷W"6–væVBÖ–â6öçfW'6F–öç2ãÂöF—cçÐÐ¢ÆF—b6Æ74æÖSÒ&ÖVÖ÷'’Öfö÷FW"Ö7F–öç2#ãÆ'WGFöâ6Æ74æÖSÒ'6WGF–æw2Ö7F–öâ"öä6Æ–6³×²‚’Óâfö–BW‡÷'DFF‚—ÓãÄF÷væÆöB6—¦S×³WÒóâW‡÷'BFFÂö'WGFöããÆ'WGFöâ6Æ74æÖSÒ'6WGF–æw2Ö7F–öâFævW""öä6Æ–6³×²‚’Óâfö–B6ÆV$ÖVÖ÷&–W2‚—ÓãÅG&6ƒ"6—¦S×³WÒóâ6ÆV"6fVBÖVÖ÷'“Âö'WGFöããÂöF—càÐ¢Â÷6V7F–öãàÐ¢ÂöF—cçÐÐ¢ÂöF—càÐ¢“°Ð§ÐÐ Ð¦6öç7B&ö÷DVÆVÖVçBÒFö7VÖVçBævWDVÆVÖVçD'”–B‚'&ö÷B"“°Ð¦–b‚&ö÷DVÆVÖVçB’F‡&÷ræWrW'&÷"‚$´õÄ’’&ö÷BVÆVÖVçBv2æ÷Bf÷VæBâ"“°Ð¦7&VFU&ö÷B‡&ö÷DVÆVÖVçB’ç&VæFW"ƒÄóâ“°Ð
