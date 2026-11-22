@@ -223,6 +223,13 @@ function App() {
     try { return localStorage.getItem("kopli.theme") === "dark"; }
     catch (error) { console.error("Could not read theme preference:", error); return false; }
   });
+  const [reduceEffects, setReduceEffects] = useState(() => {
+    try {
+      const saved = localStorage.getItem("kopli.reduce-effects");
+      return saved === null ? window.matchMedia("(prefers-reduced-motion: reduce)").matches : saved === "true";
+    }
+    catch (error) { console.error("Could not read motion preference:", error); return false; }
+  });
   const [conversations, setConversations] = useState<Conversation[]>(() => getGuestHistory());
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -362,6 +369,11 @@ function App() {
     try { localStorage.setItem("kopli.theme", dark ? "dark" : "light"); }
     catch (error) { console.error("Could not save theme preference:", error); }
   }, [dark]);
+
+  useEffect(() => {
+    try { localStorage.setItem("kopli.reduce-effects", String(reduceEffects)); }
+    catch (error) { console.error("Could not save motion preference:", error); }
+  }, [reduceEffects]);
 
   useEffect(() => {
     const element = messagesRef.current;
@@ -821,7 +833,7 @@ function App() {
     .filter(item => item.toLowerCase().includes(settingsSearch.toLowerCase()));
 
   return (
-    <div className={`app${dark ? " dark" : ""}`}>
+    <div className={`app${dark ? " dark" : ""}${reduceEffects ? " reduce-effects" : ""}`}>
       {mobileViewport && sidebarOpen && <button className="sidebar-overlay" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`} aria-label="Main navigation">
         <div className="brand"><span className="brand-mark"><img className="hen-image hen-small" src="/logo.png" alt="" /></span><strong>KOPLI <b>AI</b></strong></div>
@@ -1029,7 +1041,10 @@ function App() {
             </div>
           </div> : <div className="settings-detail">
             <button className="settings-detail-back" onClick={() => setSettingsDetail("")}><ChevronLeft size={17} /> Settings</button><h2>{settingsDetail}</h2>
-            {settingsDetail === "Appearance" && <div className="settings-card-neutral"><div className="settings-neutral-row"><div><strong>Theme</strong><span>Choose light or dark appearance</span></div><button className={`switch ${dark ? "toggle-active" : ""}`} aria-label={dark ? "Use light theme" : "Use dark theme"} aria-pressed={dark} onClick={() => setDark(value => !value)}><span className={dark ? "on" : ""} /></button></div></div>}
+            {settingsDetail === "Appearance" && <div className="settings-card-neutral">
+              <div className="settings-neutral-row"><div><strong>Theme</strong><span>Choose light or dark appearance</span></div><button className={`switch ${dark ? "toggle-active" : ""}`} aria-label={dark ? "Use light theme" : "Use dark theme"} aria-pressed={dark} onClick={() => setDark(value => !value)}><span className={dark ? "on" : ""} /></button></div>
+              <div className="settings-neutral-row"><div><strong>Reduce motion</strong><span>Turn off orb and card animations</span></div><button className={`switch ${reduceEffects ? "toggle-active" : ""}`} aria-label="Toggle reduced visual effects" aria-pressed={reduceEffects} onClick={() => setReduceEffects(value => !value)}><span className={reduceEffects ? "on" : ""} /></button></div>
+            </div>}
             {settingsDetail === "Personalization" && <div className="settings-card-neutral">
               <div className="settings-neutral-row"><div><strong>Improve responses</strong><span>Remember corrections and preferences for this account</span></div><button className={`switch ${preferences.learning ? "toggle-active" : ""}`} aria-label="Toggle response personalization" aria-pressed={preferences.learning} onClick={() => void updatePreferences({ learning: !preferences.learning })}><span className={preferences.learning ? "on" : ""} /></button></div>
               <div className="settings-neutral-row"><div><strong>Use past conversations</strong><span>Allow KOPLI AI to recall relevant chats when asked</span></div><button className={`switch ${preferences.crossChat ? "toggle-active" : ""}`} aria-label="Toggle cross-chat memory" aria-pressed={preferences.crossChat} onClick={() => void updatePreferences({ crossChat: !preferences.crossChat })}><span className={preferences.crossChat ? "on" : ""} /></button></div>

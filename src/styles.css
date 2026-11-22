@@ -1758,3 +1758,16 @@ button, a, input, textarea, select { -webkit-tap-highlight-color:transparent; }
   .ai-orb,.ai-orb[data-state="listening"],.ai-orb[data-state="generating"],.ai-orb[data-state="speaking"],.ai-orb[data-state="error"] { animation:none!important; }
   .feature-card,.feature-card:hover { transition:none!important;transform:none!important; }
 }
+.app.reduce-effects .messages { scroll-behavior:auto; }
+.app.reduce-effects .scroll-to-latest,
+.app.reduce-effects .ai-orb,
+.app.reduce-effects .ai-orb:before,
+.app.reduce-effects .ai-orb:after,
+.app.reduce-effects .feature-card { animation:none!important;transition:none!important; }
+.app.reduce-effects .ai-orb:before,.app.reduce-effects .ai-orb:after { transform:none!important; }
+.app.reduce-effects .ai-orb>span { display:none; }
+.app.reduce-effects .feature-card:hover { transform:none!important; }
+@media (max-width:620px) and (pointer:coarse) {
+  .ai-orb:after,.ai-orb>span { display:none; }
+  .feature-card:hover { transform:translateY(-2px)!important; }
+}
