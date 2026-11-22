@@ -1,23 +1,25 @@
 services:
   - type: web
     name: kopli-ai
-    runtime: docker
-    plan: free
-    healthCheckPath: /api/status
+    env: node
+    buildCommand: npm run build
+    startCommand: npm start
+    repo: https://github.com/krishnamoorthipranesh-bot/kopli-ai.git
+    branch: master
     envVars:
-      - key: GROQ_API_KEY
-        sync: false
-      - key: TAVILY_API_KEY
-        sync: false
-      - key: STABILITY_API_KEY
-        sync: false
       - key: DATABASE_URL
-        sync: false
-      - key: KOPLI_OWNER_EMAIL
-        sync: false
-      - key: KOPLI_ADMIN_SECRET
-        generateValue: true
+        fromSecret: true
+      - key: GROQ_API_KEY
+        fromSecret: true
+      - key: TAVILY_API_KEY
+        fromSecret: true
+      - key: STABILITY_API_KEY
+        fromSecret: true
+      - key: RESEND_API_KEY
+        fromSecret: true
       - key: SESSION_SECRET
-        generateValue: true
-      - key: GROQ_MODEL
-        value: openai/gpt-oss-120b
+        fromSecret: true
+      - key: KOPLI_ADMIN_SECRET
+        fromSecret: true
+      - key: APP_URL
+        value: https://kopli-ai-1.onrender.com
