@@ -212,7 +212,7 @@ function App() {
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [section, setSection] = useState<Section>("Dashboard");
-  const [sidebarOpen, setSidebarOpen] = useState(() => { try { const saved = localStorage.getItem("kopli.sidebar"); if (saved) return saved === "open"; } catch {} return window.matchMedia("(min-width: 901px)").matches; });
+  const [sidebarOpen, setSidebarOpen] = useState(() => { if (window.matchMedia("(max-width: 900px)").matches) return false; try { const saved = localStorage.getItem("kopli.sidebar"); if (saved) return saved === "open"; } catch {} return true; });
   const [mobileViewport, setMobileViewport] = useState(() => window.matchMedia("(max-width: 900px)").matches);
   const [mode, setMode] = useState<Mode>("smart");
   const [headerModeOpen, setHeaderModeOpen] = useState(false);
@@ -335,6 +335,16 @@ function App() {
       });
     }
   }, [user, activeId, messages, mode]);
+
+  useEffect(() => {
+    const match = window.location.pathname.match(/^\/chat\/([^/]+)/);
+    if (!match) return;
+    const routeMode = match[1] as Mode;
+    if (modes.some(option => option.id === routeMode)) {
+      setMode(routeMode);
+      setSection("Chat");
+    }
+  }, []);
 
   useEffect(() => {
     try { localStorage.setItem("kopli.theme", dark ? "dark" : "light"); }
