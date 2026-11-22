@@ -11,9 +11,10 @@ import {
 } from "lucide-react";
 import "./styles.css";
 import "./theme.css";
+import "./chat-theme.css";
 
 type Mode = "fast" | "smart" | "reasoning" | "coding" | "research" | "vision";
-type Section = "Dashboard" | "Chat" | "Search" | "Explore" | "Library" | "Settings" | "Admin";
+type Section = "Chat" | "Search" | "Explore" | "Library" | "Settings" | "Admin";
 type Rating = "helpful" | "not_helpful";
 type IconComponent = typeof Sparkles;
 
@@ -159,7 +160,6 @@ const modes: Array<{ id: Mode; label: string; detail: string; icon: IconComponen
 ];
 
 const navigation: Array<{ label: Section; icon: IconComponent }> = [
-  { label: "Dashboard", icon: Sparkles },
   { label: "Chat", icon: Sparkles },
   { label: "Search", icon: Search },
   { label: "Explore", icon: Globe2 },
@@ -186,7 +186,7 @@ function MessageView({
         <div className="message-content">
           {message.content
             ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-            : <div className="thinking-state" role="status"><span className="thinking-orb" /><span className="thinking-wave"><i /><i /><i /></span><span>Thinking</span></div>}
+            : <div className="thinking-state" role="status"><span className="thinking-orb"><img className="thinking-logo" src="/logo.png" alt="" /></span><span className="thinking-wave"><i /><i /><i /></span><span>Thinking</span></div>}
           {!!message.sources?.length && <div className="sources" aria-label="Sources">
             {message.sources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">[{index + 1}] {source.title || source.url}</a>)}
           </div>}
@@ -212,15 +212,15 @@ function App() {
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
-  const [section, setSection] = useState<Section>("Dashboard");
-  const [sidebarOpen, setSidebarOpen] = useState(() => { if (window.matchMedia("(max-width: 900px)").matches) return false; try { const saved = localStorage.getItem("kopli.sidebar"); if (saved) return saved === "open"; } catch {} return true; });
+  const [section, setSection] = useState<Section>("Chat");
+  const [sidebarOpen, setSidebarOpen] = useState(() => { if (window.matchMedia("(max-width: 900px)").matches) return false; try { const saved = localStorage.getItem("kopli.sidebar"); if (saved) return saved === "open"; } catch {} return false; });
   const [mobileViewport, setMobileViewport] = useState(() => window.matchMedia("(max-width: 900px)").matches);
   const [mode, setMode] = useState<Mode>("smart");
   const [headerModeOpen, setHeaderModeOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [composerModeOpen, setComposerModeOpen] = useState(false);
   const [dark, setDark] = useState(() => {
-    try { return localStorage.getItem("kopli.theme") === "dark"; }
+    try { return localStorage.getItem("kopli.theme") !== "light"; }
     catch (error) { console.error("Could not read theme preference:", error); return false; }
   });
   const [reduceEffects, setReduceEffects] = useState(() => {
@@ -237,7 +237,6 @@ function App() {
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [notice, setNotice] = useState("");
-  const [systemStatus, setSystemStatus] = useState<Record<string, boolean> | null>(null);
   const [preferences, setPreferences] = useState<Preference>({
     learning: true, crossChat: true, language: "English", personality: "balanced"
   });
@@ -264,6 +263,7 @@ function App() {
   const [adminBusy, setAdminBusy] = useState(false);
   const [settingsDetail, setSettingsDetail] = useState("");
   const [settingsSearch, setSettingsSearch] = useState("");
+  const appRootRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -271,6 +271,7 @@ function App() {
   const abortRef = useRef<AbortController | null>(null);
   const stickToBottomRef = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
+  const parallaxFrameRef = useRef<number | null>(null);
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
 
   const currentMode = useMemo(() => modes.find(item => item.id === mode) || modes[1], [mode]);
@@ -310,8 +311,32 @@ function App() {
   }, []);
 
   useEffect(() => {
-    request<{ groq: boolean; tavily: boolean; stability: boolean; database: boolean }>("/api/status").then(status => setSystemStatus({ AI: status.groq, Database: status.database, "Web search": status.tavily, "Image generation": status.stability })).catch(() => setSystemStatus(null));
-  }, []);
+    const root = appRootRef.current;
+    if (!root || reduceEffects || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const move = (event: PointerEvent) => {
+      if (event.pointerType !== "mouse") return;
+      const bounds = root.getBoundingClientRect();
+      const x = (event.clientX - bounds.left) / bounds.width - 0.5;
+      const y = (event.clientY - bounds.top) / bounds.height - 0.5;
+      if (parallaxFrameRef.current !== null) window.cancelAnimationFrame(parallaxFrameRef.current);
+      parallaxFrameRef.current = window.requestAnimationFrame(() => {
+        root.style.setProperty("--pointer-x", `${x * 18}px`);
+        root.style.setProperty("--pointer-y", `${y * 14}px`);
+        parallaxFrameRef.current = null;
+      });
+    };
+    const reset = () => {
+      root.style.setProperty("--pointer-x", "0px");
+      root.style.setProperty("--pointer-y", "0px");
+    };
+    root.addEventListener("pointermove", move, { passive: true });
+    root.addEventListener("pointerleave", reset, { passive: true });
+    return () => {
+      root.removeEventListener("pointermove", move);
+      root.removeEventListener("pointerleave", reset);
+      if (parallaxFrameRef.current !== null) window.cancelAnimationFrame(parallaxFrameRef.current);
+    };
+  }, [reduceEffects]);
 
   useEffect(() => {
     if (authReady) void loadLibrary();
@@ -389,6 +414,13 @@ function App() {
       if (latest && stickToBottomRef.current) latest.scrollTo({ top: latest.scrollHeight, behavior: "instant" });
     });
   }, [messages]);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+  }, [prompt]);
 
   useEffect(() => () => {
     if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
@@ -829,22 +861,23 @@ function App() {
   }
 
   const currentHistory = conversations.filter(item => !item.archived);
-  const settingsLinks = ["Appearance", "Personalization", "Data & memory", "Account"]
+  const settingsLinks = ["Appearance", "Personalization", "Data & memory", "Account", "About KOPLI AI"]
     .filter(item => item.toLowerCase().includes(settingsSearch.toLowerCase()));
 
   return (
-    <div className={`app${dark ? " dark" : ""}${reduceEffects ? " reduce-effects" : ""}`}>
+    <div ref={appRootRef} className={`app${dark ? " dark" : ""}${reduceEffects ? " reduce-effects" : ""}`}>
       {mobileViewport && sidebarOpen && <button className="sidebar-overlay" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`} aria-label="Main navigation">
         <div className="brand"><span className="brand-mark"><img className="hen-image hen-small" src="/logo.png" alt="" /></span><strong>KOPLI <b>AI</b></strong></div>
-        <button className="new-chat" onClick={newChat}><Plus size={18} /> New chat</button>
+        <button className="new-chat" onClick={newChat}><Plus size={18} /><span>New chat</span></button>
         <nav className="nav" aria-label="Workspace">
           {navigation.map(item => {
             const Icon = item.icon;
-            return <button key={item.label} className={section === item.label ? "active" : ""} aria-current={section === item.label ? "page" : undefined} onClick={() => chooseSection(item.label)}><Icon size={18} /><span>{({Dashboard:"Overview",Chat:"AI Assistant",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[item.label]}</span></button>;
+            return <button key={item.label} className={section === item.label ? "active" : ""} aria-current={section === item.label ? "page" : undefined} onClick={() => chooseSection(item.label)}><Icon size={18} /><span>{({Chat:"AI Assistant",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[item.label]}</span></button>;
           })}
           {user?.role === "owner" && <button className={section === "Admin" ? "active" : ""} onClick={() => void loadAdmin()}><Shield size={18} /><span>Admin</span></button>}
         </nav>
+        <button className="sidebar-about" onClick={() => { setSection("Settings"); setSettingsDetail("About KOPLI AI"); setSidebarOpen(false); }}><CircleHelp size={17} /><span>About KOPLI AI</span></button>
         <div className="history">
           <div className="history-title">Recent chats</div>
           {currentHistory.length ? currentHistory.map(conversation => (
@@ -869,8 +902,8 @@ function App() {
 
       <main className="main">
         <header className="topbar">
-          <button className={`icon-button ${mobileViewport ? "mobile-menu" : "dashboard-toggle"}`} aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} onClick={() => setSidebarOpen(value => !value)}><Menu size={19} /></button>
-          <div className="header-context"><span>Workspace</span><strong>{({Dashboard:"Overview",Chat:"My Conversations",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[section]}</strong></div>
+          <button className={`icon-button ${mobileViewport ? "mobile-menu" : "sidebar-toggle"}`} aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"} onClick={() => setSidebarOpen(value => !value)}><Menu size={19} /></button>
+          <div className="header-context"><span>Workspace</span><strong>{({Chat:"My Conversations",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[section]}</strong></div>
           <div className="top-actions">
             <button className="icon-button" aria-label="Search" title="Search" onClick={() => chooseSection("Search")}><Search size={17} /></button>
             <button className="icon-button notification-button" aria-label="Notifications" title="Notifications" onClick={() => setNotice("You are all caught up.")}><Bell size={17} /><span /></button>
@@ -881,61 +914,11 @@ function App() {
           </div>
         </header>
 
-                {section === "Dashboard" && <section className="dashboard-page" aria-label="KOPLI AI dashboard">
-          <div className="dashboard-hero">
-            <div className="dashboard-hero-copy">
-              <span className="dashboard-status"><i /> YOUR PERSONAL AI WORKSPACE</span>
-              <h1>Welcome to <strong>KOPLI AI</strong></h1>
-              <p>Your intelligent AI workspace to explore ideas, write code, create content and get things done faster.</p>
-              <button className="dashboard-prompt" onClick={newChat}><span>Ask KOPLI anything...</span><Send size={18} /></button>
-              <div className="dashboard-hero-actions">
-                <button className="dashboard-primary" onClick={newChat}><Sparkles size={18} /> Start new chat</button>
-                <button className="dashboard-secondary" onClick={() => chooseSection("Explore")}><ImageIcon size={18} /> Explore tools</button>
-              </div>
-            </div>
-            <div className="ai-orb" data-state={assistantVisualState} aria-hidden="true"><span /><span /><span /><div><Sparkles size={34} /></div></div>
-          </div>
-
-          <div className="dashboard-grid">
-            <div className="dashboard-main-column">
-              <header className="dashboard-section-heading"><div><span>Workspace</span><h2>What will you create?</h2></div></header>
-              <div className="feature-grid">
-                <button className="feature-card feature-blue" onClick={newChat}><span className="feature-icon"><Sparkles /></span><div><h3>AI Chat</h3><p>Intelligent conversations</p></div><ChevronRight size={18} /></button>
-                <button className="feature-card feature-violet" onClick={() => { setMode("coding"); chooseSection("Chat"); }}><span className="feature-icon"><Code2 /></span><div><h3>Coding</h3><p>Generate and debug code</p></div><ChevronRight size={18} /></button>
-                <button className="feature-card feature-cyan" onClick={() => { setToolType("image"); setToolPrompt(""); chooseSection("Explore"); }}><span className="feature-icon"><ImageIcon /></span><div><h3>Image Generator</h3><p>Create images from text</p></div><ChevronRight size={18} /></button>
-                <button className="feature-card feature-sky" onClick={() => chooseSection("Search")}><span className="feature-icon"><Globe2 /></span><div><h3>Web Search</h3><p>Search the internet</p></div><ChevronRight size={18} /></button>
-                <button className="feature-card feature-mint" onClick={() => { setToolType("docx"); chooseSection("Explore"); }}><span className="feature-icon"><FileText /></span><div><h3>Document Creator</h3><p>Create PDF, DOCX and PPTX</p></div><ChevronRight size={18} /></button>
-                <button className="feature-card feature-indigo" onClick={() => { setMode("reasoning"); chooseSection("Chat"); }}><span className="feature-icon"><Brain /></span><div><h3>Study Assistant</h3><p>Learn and understand topics</p></div><ChevronRight size={18} /></button>
-                <button className="feature-card feature-teal" onClick={() => chooseSection("Library")}><span className="feature-icon"><Library /></span><div><h3>File Analysis</h3><p>Analyze uploaded documents</p></div><ChevronRight size={18} /></button>
-                <button className="feature-card feature-blue" onClick={() => { setMode("smart"); setPrompt("Improve and polish this writing:\n\n"); chooseSection("Chat"); }}><span className="feature-icon"><Sparkles /></span><div><h3>Writing Assistant</h3><p>Write and improve content</p></div><ChevronRight size={18} /></button>
-              </div>
-            </div>
-
-            <aside className="dashboard-side-column">
-              <section className="status-card"><header><div><span>System</span><h2>KOPLI AI status</h2></div></header><div className="status-list">{systemStatus ? Object.entries(systemStatus).map(([name, ready]) => <div key={name}><span className={ready ? "status-dot ready" : "status-dot"}/><strong>{name}</strong><time>{ready ? "Operational" : "Unavailable"}</time></div>) : <p className="activity-empty">Checking verified services…</p>}</div></section>
-              <section className="activity-card"><header><div><span>Recent</span><h2>Activity</h2></div><button onClick={() => chooseSection("Chat")}>View all</button></header>
-                <div className="activity-list">
-                  {conversations.slice(0, 4).map(conversation => <button key={conversation.id} onClick={() => selectConversation(conversation)}><span className="activity-icon"><Sparkles size={16} /></span><div><strong>{conversation.title}</strong><time>{conversation.messages.at(-1)?.createdAt ? new Date(conversation.messages.at(-1)!.createdAt!).toLocaleString() : "Recent conversation"}</time></div></button>)}
-                  {!conversations.length && libraryFiles.slice(0, 4).map(file => <button key={file.fileName} onClick={() => chooseSection("Library")}><span className="activity-icon"><FileText size={16} /></span><div><strong>{file.fileName}</strong><time>{new Date(file.updatedAt).toLocaleString()}</time></div></button>)}
-                  {!conversations.length && !libraryFiles.length && <p className="activity-empty">Your conversations and generated files will appear here.</p>}
-                </div>
-              </section>
-              <section className="quick-card"><header><div><span>Quick</span><h2>Actions</h2></div></header><div className="quick-actions">
-                <button onClick={newChat}><Plus size={17} /> New chat</button>
-                <button onClick={() => { setToolType("image"); chooseSection("Explore"); }}><ImageIcon size={17} /> Generate image</button>
-                <button onClick={() => { setMode("coding"); chooseSection("Chat"); }}><Code2 size={17} /> Write code</button>
-                <button onClick={() => chooseSection("Search")}><Globe2 size={17} /> Search web</button>
-                <button onClick={() => { setToolType("docx"); chooseSection("Explore"); }}><FileText size={17} /> Create document</button>
-                <button onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Upload file</button>
-              </div></section>
-            </aside>
-          </div>
-        </section>}
-{section === "Chat" && <>
+                {section === "Chat" && <>
                     <section className="chat-shell" aria-label="Chat">
             {messages.length === 0 ? <div className="welcome">
-              <div className="welcome-hen"><img className="hen-image" src="/logo.png" alt="KOPLI AI" /></div>
-              <h1>What can I help with?</h1><p>Ask a question, explore an idea, or start a project.</p>
+              <div className="welcome-hen" data-state={assistantVisualState}><img className="hen-image" src="/logo.png" alt="KOPLI AI" /></div>
+              <h1>What can I help you with?</h1><p>Think, create, explore and discover with KOPLI AI.</p>
               <div className="suggestions">
                 {["Explain a topic simply", "Help me plan a project", "Write or improve code", "Research a topic"].map((item, index) => <button key={item} onClick={() => { setPrompt(item); textareaRef.current?.focus(); }}><span>{item}</span>{index === 2 ? <Code2 size={17} /> : index === 3 ? <Globe2 size={17} /> : <Sparkles size={17} />}</button>)}
               </div>
@@ -1036,6 +1019,7 @@ function App() {
             <div className="settings-main-card">
               <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("Appearance")}><Sun size={18} /><span>Appearance</span><ChevronRight size={17} /></button>
               <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("Data & memory")}><Brain size={18} /><span>Data &amp; memory</span><ChevronRight size={17} /></button>
+              <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("About KOPLI AI")}><CircleHelp size={18} /><span>About KOPLI AI</span><ChevronRight size={17} /></button>
               <button className="settings-neutral-row-button" onClick={() => user ? void signOut() : setAuthOpen(true)}>{user ? <LogOut size={18} /> : <LogIn size={18} />}<span>{user ? "Sign out" : "Sign in or create account"}</span><ChevronRight size={17} /></button>
               {user?.role === "owner" && <button className="settings-neutral-row-button" onClick={() => void loadAdmin()}><Shield size={18} /><span>Admin status</span><ChevronRight size={17} /></button>}
             </div>
@@ -1054,6 +1038,7 @@ function App() {
               <div className="settings-neutral-row"><div><strong>Export my data</strong><span>Download memory, preferences, and conversations</span></div><button className="settings-action" onClick={() => void exportData()} disabled={!user}>Export</button></div>
             </div>}
             {settingsDetail === "Account" && <div className="settings-card-neutral"><div className="settings-neutral-row"><div><strong>{user?.email || "Guest session"}</strong><span>{user ? "Your account is signed in" : "Sign in to sync your history"}</span></div><button className="settings-action" onClick={() => user ? void signOut() : setAuthOpen(true)}>{user ? "Sign out" : "Sign in"}</button></div></div>}
+            {settingsDetail === "About KOPLI AI" && <div className="settings-card-neutral about-brand"><span className="brand-mark"><img src="/logo.png" alt="KOPLI AI" /></span><div><strong>KOPLI AI</strong><span>Your personal AI workspace</span></div></div>}
           </div>}
           <div className="settings-search-wrap"><Search size={17} /><input value={settingsSearch} onChange={event => setSettingsSearch(event.target.value)} placeholder="Search settings" aria-label="Search settings" />
             {settingsSearch && <div className="settings-search-results" role="listbox">{settingsLinks.map(item => <button key={item} onClick={() => { setSettingsDetail(item); setSettingsSearch(""); }}>{item}</button>)}{!settingsLinks.length && <span>No matching settings.</span>}</div>}
