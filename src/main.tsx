@@ -251,6 +251,7 @@ function App() {
   const [toolResult, setToolResult] = useState<{ url: string; fileName: string; image?: boolean } | null>(null);
   const [toolBusy, setToolBusy] = useState(false);
   const [voiceActive, setVoiceActive] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
   const [adminStatus, setAdminStatus] = useState<Record<string, boolean> | null>(null);
   const [adminUsers, setAdminUsers] = useState<Array<{ id: string; email: string; name: string | null; role: string; createdAt: string }>>([]);
   const [adminBusy, setAdminBusy] = useState(false);
@@ -262,9 +263,18 @@ function App() {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const stickToBottomRef = useRef(true);
+  const scrollFrameRef = useRef<number | null>(null);
+  const [showScrollToLatest, setShowScrollToLatest] = useState(false);
 
   const currentMode = useMemo(() => modes.find(item => item.id === mode) || modes[1], [mode]);
   const ModeIcon = currentMode.icon;
+  const assistantVisualState = voiceActive ? "listening"
+    : toolBusy ? "generating"
+      : searchBusy || (streaming && mode === "research") ? "searching"
+        : streaming ? "thinking"
+          : speaking ? "speaking"
+            : /\b(?:failed|error|could not)\b/i.test(notice) ? "error"
+              : "idle";
 
   const loadConversations = useCallback(async () => {
     if (!user) {
@@ -355,8 +365,23 @@ function App() {
 
   useEffect(() => {
     const element = messagesRef.current;
-    if (element && stickToBottomRef.current) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    if (!element) return;
+    if (!stickToBottomRef.current) {
+      setShowScrollToLatest(true);
+      return;
+    }
+    if (scrollFrameRef.current !== null) return;
+    scrollFrameRef.current = window.requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const latest = messagesRef.current;
+      if (latest && stickToBottomRef.current) latest.scrollTo({ top: latest.scrollHeight, behavior: "instant" });
+    });
   }, [messages]);
+
+  useEffect(() => () => {
+    if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+    if ("speechSynthesis" in window) speechSynthesis.cancel();
+  }, []);
 
   useEffect(() => {
     if (!notice) return;
@@ -394,6 +419,8 @@ function App() {
 
   function newChat() {
     abortRef.current?.abort();
+    stickToBottomRef.current = true;
+    setShowScrollToLatest(false);
     setActiveId(null);
     setMessages([]);
     setPrompt("");
@@ -407,6 +434,7 @@ function App() {
   function selectConversation(conversation: Conversation) {
     abortRef.current?.abort();
     stickToBottomRef.current = true;
+    setShowScrollToLatest(false);
     setActiveId(conversation.id);
     setMessages(conversation.messages);
     setMode(modes.some(item => item.id === conversation.mode) ? conversation.mode as Mode : "smart");
@@ -454,6 +482,8 @@ function App() {
     if ((!text && !uploadedFiles.length) || streaming) return;
     let submittedText = text || "Please review the attached file.";
     const files = uploadedFiles;
+    stickToBottomRef.current = true;
+    setShowScrollToLatest(false);
     setPrompt("");
     setUploadedFiles([]);
     setStreaming(true);
@@ -680,7 +710,19 @@ function App() {
   function speak(text: string) {
     if (!("speechSynthesis" in window)) { setNotice("Speech playback is not supported in this browser."); return; }
     speechSynthesis.cancel();
-    speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    setSpeaking(false);
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.onstart = () => setSpeaking(true);
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    speechSynthesis.speak(utterance);
+  }
+
+  function scrollToLatest() {
+    stickToBottomRef.current = true;
+    setShowScrollToLatest(false);
+    const element = messagesRef.current;
+    if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }
 
   function toggleVoice() {
@@ -839,7 +881,7 @@ function App() {
                 <button className="dashboard-secondary" onClick={() => chooseSection("Explore")}><ImageIcon size={18} /> Explore tools</button>
               </div>
             </div>
-            <div className="ai-orb" aria-hidden="true"><span /><span /><span /><div><Sparkles size={34} /></div></div>
+            <div className="ai-orb" data-state={assistantVisualState} aria-hidden="true"><span /><span /><span /><div><Sparkles size={34} /></div></div>
           </div>
 
           <div className="dashboard-grid">
@@ -887,10 +929,15 @@ function App() {
               </div>
             </div> : <div className="messages" ref={messagesRef} aria-live="polite" onScroll={event => {
               const element = event.currentTarget;
-              stickToBottomRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+              const isAtBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 120;
+              stickToBottomRef.current = isAtBottom;
+              if (isAtBottom) setShowScrollToLatest(false);
             }}>
               {messages.map(message => <MessageView key={message.id} message={message} onFeedback={(item, rating) => void rateMessage(item, rating)} onCopy={text => void copyText(text)} onSpeak={speak} />)}
             </div>}
+            {showScrollToLatest && messages.length > 0 && <button className="scroll-to-latest" type="button" onClick={scrollToLatest} aria-label="Scroll to latest message">
+              <ChevronDown size={16} aria-hidden="true" /><span>Latest Message</span><i aria-label="New messages" />
+            </button>}
             <div className="composer-wrap">
               {uploadedFiles.length > 0 && <div className="attachments" aria-label="Attached files">
                 {uploadedFiles.map(file => <div key={file.id}><FileText size={14} /><span title={file.fileName}>{file.fileName}</span><button aria-label={`Remove ${file.fileName}`} onClick={() => setUploadedFiles(previous => previous.filter(item => item.id !== file.id))}><X size={14} /></button></div>)}
