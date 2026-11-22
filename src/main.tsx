@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import {
   ArrowLeft, Bell, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, Code2,
   Copy, Download, Eye, FileText, Globe2, Image as ImageIcon, Library,
-  LogIn, LogOut, Menu, Mic, Moon, CircleHelp, MoreHorizontal, Paperclip, Plus, Search,
+  LogIn, LogOut, Menu, Mic, Moon, CircleHelp, MoreHorizontal, Plus, Search,
   Send, Settings, Shield, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
   UserRound, Volume2, X, Zap
 } from "lucide-react";
@@ -993,7 +993,6 @@ function App() {
                   <div className="composer-toolbar-left">
                     <input ref={fileInputRef} type="file" multiple hidden onChange={event => void uploadFiles(event)} aria-label="Choose files" />
                     <button className="composer-button attach-button" type="button" aria-label="Attach files" title="Attach files" onClick={() => fileInputRef.current?.click()}><Plus size={21} /></button>
-                    <span className="composer-access-label">Full access</span>
                     <button className={`composer-button${mode === "research" ? " search-on" : ""}`} type="button" aria-label="Toggle research mode" title="Research mode" onClick={() => setMode(value => value === "research" ? "smart" : "research")}><Globe2 size={18} /></button>
                   </div>
                   <div className="composer-toolbar-right">
