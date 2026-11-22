@@ -86,7 +86,7 @@ button { cursor: pointer; }
   word-break: normal;
   color: var(--color-text, #16202a);
 }
-
+ max-width:78%; background:#eef6fb; border-radius:16px 16px 4px 16px; padding:11px 15px; }
 .dark .message.user .message-content {
   max-width: 80%;
   background: var(--color-chat-bg, #eef6fb);
@@ -97,7 +97,7 @@ button { cursor: pointer; }
   word-break: normal;
   color: var(--color-text, #16202a);
 }
-
+ background:#1d2a36; }
 .message-content p { margin:0; line-height:1.65; }
 .message.assistant .message-content {
   max-width: 80%;
@@ -109,7 +109,7 @@ button { cursor: pointer; }
   word-break: normal;
   color: var(--color-text, #16202a);
 }
-
+ flex:1; padding-top:3px; line-height:1.65; }
 .message-avatar { width:34px;height:34px;flex:0 0 34px;border-radius:50%;background:#eef7fc;display:grid;place-items:center; }
 .message-avatar .hen{width:30px;height:30px;}
 .message-actions { margin-top:7px; }
