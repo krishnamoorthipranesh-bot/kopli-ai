@@ -1,0 +1,53 @@
+{
+  "name": "kopli-ai",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite\"",
+    "build": "tsc -b && vite build",
+    "start": "tsx server/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0",
+    "@tavily/core": "^1.1.0",
+    "@vitejs/plugin-react": "latest",
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "latest",
+    "docx": "latest",
+    "dotenv": "latest",
+    "express": "latest",
+    "express-rate-limit": "^8.7.5",
+    "groq-sdk": "latest",
+    "helmet": "^8.3.0",
+    "lucide-react": "latest",
+    "mammoth": "^1.13.0",
+    "multer": "latest",
+    "pdf-parse": "^2.4.5",
+    "pdfkit": "latest",
+    "pptxgenjs": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-markdown": "latest",
+    "remark-gfm": "latest",
+    "xlsx": "latest"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "latest",
+    "@types/express": "latest",
+    "@types/multer": "latest",
+    "@types/node": "latest",
+    "@types/pdfkit": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "concurrently": "latest",
+    "prisma": "^6.19.0",
+    "tsx": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "vitest": "latest"
+  }
+}

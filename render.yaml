@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: kopli-ai
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/status
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: STABILITY_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: KOPLI_OWNER_EMAIL
+        sync: false
+      - key: KOPLI_ADMIN_SECRET
+        generateValue: true
