@@ -776,18 +776,7 @@ function App() {
       <main className="main">
         <header className="topbar">
           <button className={`icon-button ${mobileViewport ? "mobile-menu" : "dashboard-toggle"}`} aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} onClick={() => setSidebarOpen(value => !value)}><Menu size={19} /></button>
-          <div className="mode-selector">
-            <button className="mode-selector-trigger" aria-expanded={headerModeOpen} onClick={() => setHeaderModeOpen(value => !value)}><ModeIcon size={16} /><span>{currentMode.label}</span><ChevronDown size={15} /></button>
-            {headerModeOpen && <div className="mode-selector-menu" role="menu">
-              {modes.map(option => {
-                const Icon = option.icon;
-                return <button key={option.id} className={mode === option.id ? "selected" : ""} role="menuitemradio" aria-checked={mode === option.id} onClick={() => { setMode(option.id); setHeaderModeOpen(false); }}>
-                  <Icon size={17} /><div><strong>{option.label}</strong><span>{option.detail}</span></div>{mode === option.id && <Check size={15} />}
-                </button>;
-              })}
-            </div>}
-          </div>
-          <div className="top-actions">
+                    <div className="top-actions">
             <button className="icon-button" aria-label="Search" title="Search" onClick={() => chooseSection("Search")}><Search size={17} /></button>
             <button className="icon-button" aria-label={dark ? "Use light theme" : "Use dark theme"} title="Toggle theme" onClick={() => setDark(value => !value)}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
             <button className="icon-button" aria-label={user ? "Open settings" : "Sign in"} title={user ? "Settings" : "Sign in"} onClick={() => user ? chooseSection("Settings") : setAuthOpen(true)}>{user ? <UserRound size={17} /> : <LogIn size={17} />}</button>
