@@ -809,13 +809,6 @@ function App() {
             <div className="ai-orb" aria-hidden="true"><span /><span /><span /><div><Sparkles size={34} /></div></div>
           </div>
 
-          <div className="dashboard-stats" aria-label="Workspace statistics">
-            <article><span className="stat-icon"><Sparkles size={19} /></span><div><strong>{conversations.length}</strong><p>Total conversations</p></div></article>
-            <article><span className="stat-icon"><Send size={19} /></span><div><strong>{conversations.reduce((total, item) => total + item.messages.length, 0)}</strong><p>AI messages</p></div></article>
-            <article><span className="stat-icon"><FileText size={19} /></span><div><strong>{libraryFiles.length}</strong><p>Library files</p></div></article>
-            <article><span className="stat-icon"><ImageIcon size={19} /></span><div><strong>{libraryFiles.filter(file => /\.(png|jpg|jpeg|webp|gif)$/i.test(file.fileName)).length}</strong><p>Generated images</p></div></article>
-          </div>
-
           <div className="dashboard-grid">
             <div className="dashboard-main-column">
               <header className="dashboard-section-heading"><div><span>Workspace</span><h2>What will you create?</h2></div></header>
