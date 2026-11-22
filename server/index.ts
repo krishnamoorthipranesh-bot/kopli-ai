@@ -556,6 +556,29 @@ app.get("/api/auth/me", async (req, res) => {
   res.json({ authenticated: true, user: { email: user.email, name: user.name, role: user.role } });
 });
 
+app.get("/api/admin/users", async (req, res) => {
+  const session = verifySession(req.cookies?.kopli_session);
+  if (!session || session.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
+  if (!prisma) return res.json({ users: [] });
+  const users = await prisma.user.findMany({ orderBy: { createdAt: "desc" }, select: { id: true, email: true, name: true, role: true, createdAt: true } });
+  res.json({ users });
+});
+
+app.patch("/api/admin/users/:id", async (req, res) => {
+  const session = verifySession(req.cookies?.kopli_session);
+  if (!session || session.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
+  if (!prisma) return res.status(503).json({ error: "Database is unavailable." });
+  const id = path.basename(req.params.id);
+  const role = req.body?.role;
+  if (role !== undefined && role !== "user" && role !== "owner") return res.status(400).json({ error: "Invalid role." });
+  const target = await prisma.user.findUnique({ where: { id }, select: { email: true } });
+  if (!target) return res.status(404).json({ error: "User not found." });
+  if (target.email === session.email) return res.status(400).json({ error: "Administrator cannot change their own role." });
+  const user = await prisma.user.update({ where: { id }, data: role ? { role } : {} }).catch(() => null);
+  if (!user) return res.status(404).json({ error: "User not found." });
+  res.json({ user: { id: user.id, email: user.email, name: user.name, role: user.role } });
+});
+
 app.post("/api/auth/logout", (req, res) => {
   const token = req.cookies?.kopli_session;
   if (token) {
@@ -949,7 +972,7 @@ app.post("/api/images/generate", async (req, res) => {
         model: aiConfig.groqModel,
         temperature: 0.4,
         messages: [
-          { role: "system", content: "Enhance the user's image prompt for a photorealistic image generation model. Preserve the exact subject and intention. Return only the improved prompt, without quotation marks or explanations." },
+          { role: "system", content: "Enhance the user's image prompt for an accurate educational visual. Preserve every named subject and learning stage. For roadmap, flowchart, infographic or diagram requests, create a clearly labeled technical progression and never substitute roads or unrelated transportation scenes. Return only the improved prompt." },
           { role: "user", content: prompt }
         ]
       });
