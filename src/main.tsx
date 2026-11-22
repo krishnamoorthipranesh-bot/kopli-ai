@@ -180,7 +180,7 @@ function MessageView({
   const isUser = message.role === "user";
   return (
     <article className={`message ${message.role}${message.streaming ? " streaming" : ""}`}>
-      {!isUser && <div className="message-avatar" aria-hidden="true"><img className="hen-image hen-small" src="/hen-logo-4k.png" alt="" /></div>}
+      {!isUser && <div className="message-avatar" aria-hidden="true"><img className="hen-image hen-small" src="/logo.png" alt="" /></div>}
       <div className="message-user-content">
         <div className="message-content">
           {message.content
@@ -781,7 +781,7 @@ function App() {
     <div className={`app${dark ? " dark" : ""}`}>
       {mobileViewport && sidebarOpen && <button className="sidebar-overlay" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`} aria-label="Main navigation">
-        <div className="brand"><span className="brand-mark"><img className="hen-image hen-small" src="/hen-logo-4k.png" alt="" /></span><strong>KOPLI <b>AI</b></strong></div>
+        <div className="brand"><span className="brand-mark"><img className="hen-image hen-small" src="/logo.png" alt="" /></span><strong>KOPLI <b>AI</b></strong></div>
         <button className="new-chat" onClick={newChat}><Plus size={18} /> New chat</button>
         <nav className="nav" aria-label="Workspace">
           {navigation.map(item => {
@@ -879,7 +879,7 @@ function App() {
 {section === "Chat" && <>
                     <section className="chat-shell" aria-label="Chat">
             {messages.length === 0 ? <div className="welcome">
-              <div className="welcome-hen"><img className="hen-image" src="/hen-logo-4k.png" alt="KOPLI AI" /></div>
+              <div className="welcome-hen"><img className="hen-image" src="/logo.png" alt="KOPLI AI" /></div>
               <h1>What can I help with?</h1><p>Ask a question, explore an idea, or start a project.</p>
               <div className="suggestions">
                 {["Explain a topic simply", "Help me plan a project", "Write or improve code", "Research a topic"].map((item, index) => <button key={item} onClick={() => { setPrompt(item); textareaRef.current?.focus(); }}><span>{item}</span>{index === 2 ? <Code2 size={17} /> : index === 3 ? <Globe2 size={17} /> : <Sparkles size={17} />}</button>)}
