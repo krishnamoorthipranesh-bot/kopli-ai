@@ -845,8 +845,7 @@ function App() {
           </div>
         </section>}
 {section === "Chat" && <>
-          {mode !== "smart" && <div className={`workspace-banner workspace-${mode}`}><span className="workspace-icon"><ModeIcon size={23} /></span><div><h1>{currentMode.label} workspace</h1><p>{currentMode.detail}. Change modes at any time.</p></div><button onClick={() => setMode("smart")}>Switch to Smart <X size={15} /></button></div>}
-          <section className="chat-shell" aria-label="Chat">
+                    <section className="chat-shell" aria-label="Chat">
             {messages.length === 0 ? <div className="welcome">
               <div className="welcome-hen"><img className="hen-image" src="/hen-logo-4k.png" alt="KOPLI AI" /></div>
               <h1>What can I help with?</h1><p>Ask a question, explore an idea, or start a project.</p>
