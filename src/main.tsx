@@ -12,7 +12,7 @@ import {
 import "./styles.css";
 
 type Mode = "fast" | "smart" | "reasoning" | "coding" | "research" | "vision";
-type Section = "Chat" | "Search" | "Explore" | "Library" | "Settings" | "Admin";
+type Section = "Dashboard" | "Chat" | "Search" | "Explore" | "Library" | "Settings" | "Admin";
 type Rating = "helpful" | "not_helpful";
 type IconComponent = typeof Sparkles;
 
@@ -210,7 +210,7 @@ function App() {
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
-  const [section, setSection] = useState<Section>("Chat");
+  const [section, setSection] = useState<Section>("Dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 901px)").matches);
   const [mobileViewport, setMobileViewport] = useState(() => window.matchMedia("(max-width: 900px)").matches);
   const [mode, setMode] = useState<Mode>("smart");
@@ -286,6 +286,10 @@ function App() {
     viewport.addEventListener("change", update);
     return () => viewport.removeEventListener("change", update);
   }, []);
+
+  useEffect(() => {
+    if (authReady) void loadLibrary();
+  }, [authReady, user]);
 
   useEffect(() => {
     if (!authReady) return;
@@ -455,7 +459,8 @@ function App() {
         submittedText += `\n\n[Text extracted from ${file.fileName}${analysis.truncated ? " (truncated)" : ""}]\n${analysis.text.slice(0, 30000)}`;
       }
       if (mode === "research") {
-        const result = await request<{ answer: string; sources: Source[] }>("/api/chat/search", jsonRequest("POST", { message: submittedText }));
+        const result = await request<{ answer: string; sources: Source[]; conversationId?: string }>("/api/chat/search", jsonRequest("POST", { message: submittedText, conversationId }));
+        setActiveId(result.conversationId || conversationId);
         setMessages(previous => previous.map(message => message.id === assistantId
           ? { ...message, content: result.answer, sources: result.sources, streaming: false }
           : message));
@@ -789,7 +794,63 @@ function App() {
           </div>
         </header>
 
-        {section === "Chat" && <>
+                {section === "Dashboard" && <section className="dashboard-page" aria-label="KOPLI AI dashboard">
+          <div className="dashboard-hero">
+            <div className="dashboard-hero-copy">
+              <span className="dashboard-status"><i /> KOPLI AI is ready</span>
+              <h1>Welcome to <strong>KOPLI AI</strong></h1>
+              <p>Your intelligent workspace. Think smarter. Create faster.</p>
+              <button className="dashboard-prompt" onClick={newChat}><span>Ask KOPLI anything...</span><Send size={18} /></button>
+              <div className="dashboard-hero-actions">
+                <button className="dashboard-primary" onClick={newChat}><Sparkles size={18} /> Start new chat</button>
+                <button className="dashboard-secondary" onClick={() => chooseSection("Explore")}><ImageIcon size={18} /> Explore tools</button>
+              </div>
+            </div>
+            <div className="ai-orb" aria-hidden="true"><span /><span /><span /><div><Sparkles size={34} /></div></div>
+          </div>
+
+          <div className="dashboard-stats" aria-label="Workspace statistics">
+            <article><span className="stat-icon"><Sparkles size={19} /></span><div><strong>{conversations.length}</strong><p>Total conversations</p></div></article>
+            <article><span className="stat-icon"><Send size={19} /></span><div><strong>{conversations.reduce((total, item) => total + item.messages.length, 0)}</strong><p>AI messages</p></div></article>
+            <article><span className="stat-icon"><FileText size={19} /></span><div><strong>{libraryFiles.length}</strong><p>Library files</p></div></article>
+            <article><span className="stat-icon"><ImageIcon size={19} /></span><div><strong>{libraryFiles.filter(file => /\.(png|jpg|jpeg|webp|gif)$/i.test(file.fileName)).length}</strong><p>Generated images</p></div></article>
+          </div>
+
+          <div className="dashboard-grid">
+            <div className="dashboard-main-column">
+              <header className="dashboard-section-heading"><div><span>Workspace</span><h2>What will you create?</h2></div></header>
+              <div className="feature-grid">
+                <button className="feature-card feature-blue" onClick={newChat}><span className="feature-icon"><Sparkles /></span><div><h3>AI Chat</h3><p>Intelligent conversations</p></div><ChevronRight size={18} /></button>
+                <button className="feature-card feature-violet" onClick={() => { setMode("coding"); chooseSection("Chat"); }}><span className="feature-icon"><Code2 /></span><div><h3>Coding</h3><p>Generate and debug code</p></div><ChevronRight size={18} /></button>
+                <button className="feature-card feature-cyan" onClick={() => { setToolType("image"); setToolPrompt(""); chooseSection("Explore"); }}><span className="feature-icon"><ImageIcon /></span><div><h3>Image Generator</h3><p>Create images from text</p></div><ChevronRight size={18} /></button>
+                <button className="feature-card feature-sky" onClick={() => chooseSection("Search")}><span className="feature-icon"><Globe2 /></span><div><h3>Web Search</h3><p>Search the internet</p></div><ChevronRight size={18} /></button>
+                <button className="feature-card feature-mint" onClick={() => { setToolType("docx"); chooseSection("Explore"); }}><span className="feature-icon"><FileText /></span><div><h3>Document Creator</h3><p>Create PDF, DOCX and PPTX</p></div><ChevronRight size={18} /></button>
+                <button className="feature-card feature-indigo" onClick={() => { setMode("reasoning"); chooseSection("Chat"); }}><span className="feature-icon"><Brain /></span><div><h3>Study Assistant</h3><p>Learn and understand topics</p></div><ChevronRight size={18} /></button>
+                <button className="feature-card feature-teal" onClick={() => chooseSection("Library")}><span className="feature-icon"><Library /></span><div><h3>File Analysis</h3><p>Analyze uploaded documents</p></div><ChevronRight size={18} /></button>
+                <button className="feature-card feature-blue" onClick={() => { setMode("smart"); setPrompt("Improve and polish this writing:\n\n"); chooseSection("Chat"); }}><span className="feature-icon"><Sparkles /></span><div><h3>Writing Assistant</h3><p>Write and improve content</p></div><ChevronRight size={18} /></button>
+              </div>
+            </div>
+
+            <aside className="dashboard-side-column">
+              <section className="activity-card"><header><div><span>Recent</span><h2>Activity</h2></div><button onClick={() => chooseSection("Chat")}>View all</button></header>
+                <div className="activity-list">
+                  {conversations.slice(0, 4).map(conversation => <button key={conversation.id} onClick={() => selectConversation(conversation)}><span className="activity-icon"><Sparkles size={16} /></span><div><strong>{conversation.title}</strong><time>{conversation.messages.at(-1)?.createdAt ? new Date(conversation.messages.at(-1)!.createdAt!).toLocaleString() : "Recent conversation"}</time></div></button>)}
+                  {!conversations.length && libraryFiles.slice(0, 4).map(file => <button key={file.fileName} onClick={() => chooseSection("Library")}><span className="activity-icon"><FileText size={16} /></span><div><strong>{file.fileName}</strong><time>{new Date(file.updatedAt).toLocaleString()}</time></div></button>)}
+                  {!conversations.length && !libraryFiles.length && <p className="activity-empty">Your conversations and generated files will appear here.</p>}
+                </div>
+              </section>
+              <section className="quick-card"><header><div><span>Quick</span><h2>Actions</h2></div></header><div className="quick-actions">
+                <button onClick={newChat}><Plus size={17} /> New chat</button>
+                <button onClick={() => { setToolType("image"); chooseSection("Explore"); }}><ImageIcon size={17} /> Generate image</button>
+                <button onClick={() => { setMode("coding"); chooseSection("Chat"); }}><Code2 size={17} /> Write code</button>
+                <button onClick={() => chooseSection("Search")}><Globe2 size={17} /> Search web</button>
+                <button onClick={() => { setToolType("docx"); chooseSection("Explore"); }}><FileText size={17} /> Create document</button>
+                <button onClick={() => fileInputRef.current?.click()}><Paperclip size={17} /> Upload file</button>
+              </div></section>
+            </aside>
+          </div>
+        </section>}
+{section === "Chat" && <>
           {mode !== "smart" && <div className={`workspace-banner workspace-${mode}`}><span className="workspace-icon"><ModeIcon size={23} /></span><div><h1>{currentMode.label} workspace</h1><p>{currentMode.detail}. Change modes at any time.</p></div><button onClick={() => setMode("smart")}>Switch to Smart <X size={15} /></button></div>}
           <section className="chat-shell" aria-label="Chat">
             {messages.length === 0 ? <div className="welcome">
