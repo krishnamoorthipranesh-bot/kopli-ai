@@ -10,6 +10,7 @@ import {
   UserRound, Volume2, X, Zap
 } from "lucide-react";
 import "./styles.css";
+import "./theme.css";
 
 type Mode = "fast" | "smart" | "reasoning" | "coding" | "research" | "vision";
 type Section = "Dashboard" | "Chat" | "Search" | "Explore" | "Library" | "Settings" | "Admin";

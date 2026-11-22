@@ -1,0 +1,20 @@
+/* Light Blue Theme Variables */
+:root {
+  --color-primary: #5ea6ff; /* Soft light blue */
+  --color-secondary: #8ab9ff; /* Sky blue */
+  --color-background: #f5fbff; /* Very light blue / off‑white */
+  --color-chat-bg: #ffffff; /* Chat area white */
+  --color-card: #ffffff; /* Card background */
+  --color-button: #5ea6ff; /* Button primary */
+  --color-text: #1a2634; /* Dark navy */
+  --color-border: #c0d6f5; /* Soft blue‑grey */
+  --color-hover: #4a8ae6; /* Slightly deeper blue */
+  --color-focus: #4a8ae6; /* Focus outline */
+}
+
+/* Global resets using theme */
+body {
+  background-color: var(--color-background);
+  color: var(--color-text);
+  font-family: system-ui, sans-serif;
+}
