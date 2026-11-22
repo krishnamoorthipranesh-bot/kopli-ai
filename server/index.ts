@@ -550,7 +550,7 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.get("/api/auth/me", async (req, res) => {
   const user = await currentUser(req);
-  if (!user) return res.status(401).json({ authenticated: false });
+  if (!user) return res.json({ authenticated: false });
   res.json({ authenticated: true, user: { email: user.email, name: user.name, role: user.role } });
 });
 
@@ -866,6 +866,14 @@ app.post("/api/chat/search", async (req, res) => {
   const prompt = String(req.body?.message || req.body?.query || "").trim();
   if (!prompt) return res.status(400).json({ error: "Search prompt cannot be empty." });
   if (!configured(process.env.TAVILY_API_KEY) || !groq) return res.status(503).json({ error: "Real web-assisted chat requires GROQ_API_KEY and TAVILY_API_KEY." });
+  const user = await currentUser(req);
+  const conversationId = typeof req.body?.conversationId === "string" && req.body.conversationId
+    ? req.body.conversationId.slice(0, 100)
+    : crypto.randomUUID();
+  const existing = user && prisma
+    ? await prisma.conversation.findUnique({ where: { id: conversationId }, select: { id: true, userId: true } })
+    : null;
+  if (existing && user && existing.userId !== user.id) return res.status(404).json({ error: "Conversation not found." });
   const search = await fetch(`http://localhost:${process.env.PORT || 8787}/api/search`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -874,6 +882,7 @@ app.post("/api/chat/search", async (req, res) => {
   const data = await search.json() as { sources?: any[] };
   if (!search.ok) return res.status(search.status).json(data);
   const context = (data.sources || []).map((s, i) => `[${i + 1}] ${s.title}\n${s.url}\n${s.content || s.snippet || ""}`).join("\n\n");
+  let answer = "";
   try {
     const completion = await groq.chat.completions.create({
       model: "openai/gpt-oss-120b",
@@ -882,10 +891,46 @@ app.post("/api/chat/search", async (req, res) => {
         { role: "user", content: `${prompt}\n\nRetrieved context:\n${context}` }
       ]
     });
-    res.json({ answer: completion.choices[0]?.message?.content || "", sources: data.sources || [] });
+    answer = completion.choices[0]?.message?.content || "";
   } catch (error: any) {
-    res.status(502).json({ error: error.message, sources: data.sources || [] });
+    return res.status(502).json({ error: error.message, sources: data.sources || [] });
   }
+  if (!answer.trim()) return res.status(502).json({ error: "The research answer was empty.", sources: data.sources || [] });
+  if (user && prisma && answer) {
+    try {
+      if (existing) {
+        await prisma.$transaction([
+          prisma.message.create({ data: { conversationId, role: "user", content: prompt } }),
+          prisma.message.create({ data: { conversationId, role: "assistant", content: answer } }),
+          prisma.conversation.update({ where: { id: conversationId }, data: { mode: "research", updatedAt: new Date() } })
+        ]);
+      } else {
+        await prisma.conversation.create({
+          data: {
+            id: conversationId,
+            title: prompt.slice(0, 60),
+            mode: "research",
+            userId: user.id,
+            messages: { create: [{ role: "user", content: prompt }, { role: "assistant", content: answer }] }
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Could not save researched conversation:", error);
+      return res.status(503).json({ error: "The researched response could not be saved." });
+    }
+    try {
+      const preference = await prisma.userPreference.findUnique({ where: { userId: user.id }, select: { learning: true } });
+      if (preference?.learning) {
+        void updateConversationSummary(user.id, conversationId).catch(error => {
+          console.error("Could not update researched conversation summary:", error);
+        });
+      }
+    } catch (error) {
+      console.error("Could not check researched conversation memory preference:", error);
+    }
+  }
+  res.json({ answer, sources: data.sources || [], conversationId });
 });
 
 app.post("/api/images/generate", async (req, res) => {

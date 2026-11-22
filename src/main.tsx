@@ -3,9 +3,9 @@ import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  ArrowLeft, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, Code2,
+  ArrowLeft, Bell, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, Code2,
   Copy, Download, Eye, FileText, Globe2, Image as ImageIcon, Library,
-  LogIn, LogOut, Menu, Mic, Moon, MoreHorizontal, Paperclip, Plus, Search,
+  LogIn, LogOut, Menu, Mic, Moon, CircleHelp, MoreHorizontal, Paperclip, Plus, Search,
   Send, Settings, Shield, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
   UserRound, Volume2, X, Zap
 } from "lucide-react";
@@ -158,6 +158,7 @@ const modes: Array<{ id: Mode; label: string; detail: string; icon: IconComponen
 ];
 
 const navigation: Array<{ label: Section; icon: IconComponent }> = [
+  { label: "Dashboard", icon: Sparkles },
   { label: "Chat", icon: Sparkles },
   { label: "Search", icon: Search },
   { label: "Explore", icon: Globe2 },
@@ -211,10 +212,11 @@ function App() {
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [section, setSection] = useState<Section>("Dashboard");
-  const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 901px)").matches);
+  const [sidebarOpen, setSidebarOpen] = useState(() => { try { const saved = localStorage.getItem("kopli.sidebar"); if (saved) return saved === "open"; } catch {} return window.matchMedia("(min-width: 901px)").matches; });
   const [mobileViewport, setMobileViewport] = useState(() => window.matchMedia("(max-width: 900px)").matches);
   const [mode, setMode] = useState<Mode>("smart");
   const [headerModeOpen, setHeaderModeOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [composerModeOpen, setComposerModeOpen] = useState(false);
   const [dark, setDark] = useState(() => {
     try { return localStorage.getItem("kopli.theme") === "dark"; }
@@ -227,6 +229,7 @@ function App() {
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [notice, setNotice] = useState("");
+  const [systemStatus, setSystemStatus] = useState<Record<string, boolean> | null>(null);
   const [preferences, setPreferences] = useState<Preference>({
     learning: true, crossChat: true, language: "English", personality: "balanced"
   });
@@ -285,6 +288,10 @@ function App() {
     const update = () => setMobileViewport(viewport.matches);
     viewport.addEventListener("change", update);
     return () => viewport.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    request<{ groq: boolean; tavily: boolean; stability: boolean; database: boolean }>("/api/status").then(status => setSystemStatus({ AI: status.groq, Database: status.database, "Web search": status.tavily, "Image generation": status.stability })).catch(() => setSystemStatus(null));
   }, []);
 
   useEffect(() => {
@@ -747,7 +754,7 @@ function App() {
         <nav className="nav" aria-label="Workspace">
           {navigation.map(item => {
             const Icon = item.icon;
-            return <button key={item.label} className={section === item.label ? "active" : ""} aria-current={section === item.label ? "page" : undefined} onClick={() => chooseSection(item.label)}><Icon size={18} /><span>{item.label}</span></button>;
+            return <button key={item.label} className={section === item.label ? "active" : ""} aria-current={section === item.label ? "page" : undefined} onClick={() => chooseSection(item.label)}><Icon size={18} /><span>{({Dashboard:"Overview",Chat:"AI Assistant",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[item.label]}</span></button>;
           })}
           {user?.role === "owner" && <button className={section === "Admin" ? "active" : ""} onClick={() => void loadAdmin()}><Shield size={18} /><span>Admin</span></button>}
         </nav>
@@ -776,19 +783,23 @@ function App() {
       <main className="main">
         <header className="topbar">
           <button className={`icon-button ${mobileViewport ? "mobile-menu" : "dashboard-toggle"}`} aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} onClick={() => setSidebarOpen(value => !value)}><Menu size={19} /></button>
-                    <div className="top-actions">
+          <div className="header-context"><span>Workspace</span><strong>{({Dashboard:"Overview",Chat:"My Conversations",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[section]}</strong></div>
+          <div className="top-actions">
             <button className="icon-button" aria-label="Search" title="Search" onClick={() => chooseSection("Search")}><Search size={17} /></button>
+            <button className="icon-button notification-button" aria-label="Notifications" title="Notifications" onClick={() => setNotice("You are all caught up.")}><Bell size={17} /><span /></button>
             <button className="icon-button" aria-label={dark ? "Use light theme" : "Use dark theme"} title="Toggle theme" onClick={() => setDark(value => !value)}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
-            <button className="icon-button" aria-label={user ? "Open settings" : "Sign in"} title={user ? "Settings" : "Sign in"} onClick={() => user ? chooseSection("Settings") : setAuthOpen(true)}>{user ? <UserRound size={17} /> : <LogIn size={17} />}</button>
+            <button className="icon-button" aria-label="Help and support" title="Help and support" onClick={() => chooseSection("Settings")}><CircleHelp size={17} /></button>
+            <div className="profile-menu-wrap"><button className="header-avatar" aria-label="Open profile menu" aria-expanded={profileMenuOpen} onClick={() => setProfileMenuOpen(value => !value)}>{user ? (user.name || user.email).slice(0,2).toUpperCase() : <UserRound size={17} />}</button>
+              {profileMenuOpen && <div className="profile-dropdown"><button onClick={() => user ? chooseSection("Settings") : setAuthOpen(true)}><UserRound size={16}/><span>{user ? "Account settings" : "Sign in"}</span></button><button onClick={() => chooseSection("Settings")}><Settings size={16}/><span>Preferences</span></button></div>}</div>
           </div>
         </header>
 
                 {section === "Dashboard" && <section className="dashboard-page" aria-label="KOPLI AI dashboard">
           <div className="dashboard-hero">
             <div className="dashboard-hero-copy">
-              <span className="dashboard-status"><i /> KOPLI AI is ready</span>
+              <span className="dashboard-status"><i /> YOUR PERSONAL AI WORKSPACE</span>
               <h1>Welcome to <strong>KOPLI AI</strong></h1>
-              <p>Your intelligent workspace. Think smarter. Create faster.</p>
+              <p>Your intelligent AI workspace to explore ideas, write code, create content and get things done faster.</p>
               <button className="dashboard-prompt" onClick={newChat}><span>Ask KOPLI anything...</span><Send size={18} /></button>
               <div className="dashboard-hero-actions">
                 <button className="dashboard-primary" onClick={newChat}><Sparkles size={18} /> Start new chat</button>
@@ -821,6 +832,7 @@ function App() {
             </div>
 
             <aside className="dashboard-side-column">
+              <section className="status-card"><header><div><span>System</span><h2>KOPLI AI status</h2></div></header><div className="status-list">{systemStatus ? Object.entries(systemStatus).map(([name, ready]) => <div key={name}><span className={ready ? "status-dot ready" : "status-dot"}/><strong>{name}</strong><time>{ready ? "Operational" : "Unavailable"}</time></div>) : <p className="activity-empty">Checking verified services…</p>}</div></section>
               <section className="activity-card"><header><div><span>Recent</span><h2>Activity</h2></div><button onClick={() => chooseSection("Chat")}>View all</button></header>
                 <div className="activity-list">
                   {conversations.slice(0, 4).map(conversation => <button key={conversation.id} onClick={() => selectConversation(conversation)}><span className="activity-icon"><Sparkles size={16} /></span><div><strong>{conversation.title}</strong><time>{conversation.messages.at(-1)?.createdAt ? new Date(conversation.messages.at(-1)!.createdAt!).toLocaleString() : "Recent conversation"}</time></div></button>)}
