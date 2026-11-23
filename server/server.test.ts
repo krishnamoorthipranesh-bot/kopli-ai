@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedOrigin } from "./index.js";
+import { deflateRawSync } from "node:zlib";
+import { extractTextFromZipArchive, isAllowedOrigin } from "./index.js";
 import { containsSensitiveSecret, isPastContextQuery, memoryKeywords } from "./memory-utils.js";
 
 describe("origin and CORS security", () => {
@@ -65,5 +66,47 @@ describe("past context and memory query parsing", () => {
     expect(keywords).not.toContain("you");
     expect(keywords).not.toContain("the");
     expect(keywords).not.toContain("for");
+  });
+});
+
+function makeZipFile(fileName: string, text: string) {
+  const name = Buffer.from(fileName);
+  const data = deflateRawSync(Buffer.from(text));
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(8, 8);
+  local.writeUInt32LE(data.length, 18);
+  local.writeUInt32LE(Buffer.byteLength(text), 22);
+  local.writeUInt16LE(name.length, 26);
+  const localRecord = Buffer.concat([local, name, data]);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt16LE(8, 10);
+  central.writeUInt32LE(data.length, 20);
+  central.writeUInt32LE(Buffer.byteLength(text), 24);
+  central.writeUInt16LE(name.length, 28);
+  const centralRecord = Buffer.concat([central, name]);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(centralRecord.length, 12);
+  end.writeUInt32LE(localRecord.length, 16);
+  return Buffer.concat([localRecord, centralRecord, end]);
+}
+
+describe("ZIP attachment text extraction", () => {
+  it("reads supported text files from an archive without extracting paths to disk", () => {
+    const result = extractTextFromZipArchive(makeZipFile("folder/readme.txt", "KOPLI upload instructions"));
+    expect(result).toContain("readme.txt");
+    expect(result).toContain("KOPLI upload instructions");
+  });
+
+  it("rejects invalid archives and archives without readable text", () => {
+    expect(() => extractTextFromZipArchive(Buffer.from("not a zip archive"))).toThrow("invalid");
+    expect(() => extractTextFromZipArchive(makeZipFile("image.bin", "binary"))).toThrow("No supported readable text");
   });
 });

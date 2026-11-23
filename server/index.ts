@@ -11,7 +11,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { inflateRawSync } from "node:zlib";
 import Groq from "groq-sdk";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, Header, Footer } from "docx";
 import PDFDocument from "pdfkit";
@@ -89,42 +91,79 @@ for (const dir of [storage, generated, uploads]) fs.mkdirSync(dir, { recursive: 
 
 const conversations = new Map<string, { id: string; title: string; archived: boolean; pinned: boolean; mode: string; messages: Array<{ role: "user" | "assistant"; content: string }> }>();
 const configured = (value?: string) => Boolean(value && !/^YOUR_/i.test(value) && !/^replace_/i.test(value));
-if (configured(process.env.DATABASE_URL)) {
-  try {
-    console.log("Checking database schema and migrations...");
-    execSync("npx prisma migrate deploy", { stdio: "inherit" });
-    console.log("Database migrations applied successfully.");
-  } catch (err: any) {
-    console.error("Database migration check note:", err?.message || err);
-  }
-}
 const groq = aiConfig.groqConfigured ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
 const prisma = configured(process.env.DATABASE_URL) ? new PrismaClient() : null;
-const sessionStore = new Map<string, { email: string; role: "user" | "owner"; expiresAt: number }>();
-const sessionSecret = securityConfig.sessionSecret || crypto.randomBytes(32).toString("hex");
+let databaseReady = false;
+let databaseStatus: "not_configured" | "starting" | "ready" | "unavailable" = prisma ? "starting" : "not_configured";
+const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
+const hashToken = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
 
-function signSession(id: string, expiresAt: number) {
-  return `${id}.${crypto.createHmac("sha256", sessionSecret).update(`${id}.${expiresAt}`).digest("base64url")}.${expiresAt}`;
+async function createSession(userId: string, req: express.Request, res: express.Response) {
+  if (!prisma || !databaseReady) throw new Error("Account database is unavailable.");
+  const token = crypto.randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + sessionLifetimeMs);
+  await prisma.authSession.create({ data: { tokenHash: hashToken(token), userId, expiresAt } });
+  res.cookie("kopli_session", token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: securityConfig.isProduction || req.secure,
+    path: "/",
+    maxAge: sessionLifetimeMs
+  });
 }
 
-function verifySession(token?: string) {
-  if (!token) return null;
-  const parts = token.split(".");
-  if (parts.length !== 3) return null;
-  const [id, signature, expiresText] = parts;
-  const expiresAt = Number(expiresText);
-  if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) return null;
-  const expected = crypto.createHmac("sha256", sessionSecret).update(`${id}.${expiresAt}`).digest("base64url");
-  if (signature !== expected) return null;
-  const session = sessionStore.get(id);
-  if (!session || session.expiresAt !== expiresAt) return null;
-  return session;
+async function currentUser(req: express.Request, res?: express.Response) {
+  const token = req.cookies?.kopli_session;
+  if (!token || !prisma || !databaseReady) return null;
+  const session = await prisma.authSession.findFirst({
+    where: { tokenHash: hashToken(token), expiresAt: { gt: new Date() } },
+    include: { user: true }
+  });
+  if (!session) return null;
+  const now = Date.now();
+  if (res && session.expiresAt.getTime() - now < sessionLifetimeMs / 2) {
+    const expiresAt = new Date(now + sessionLifetimeMs);
+    await prisma.authSession.update({ where: { id: session.id }, data: { expiresAt, lastUsedAt: new Date(now) } });
+    res.cookie("kopli_session", token, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: securityConfig.isProduction || req.secure,
+      path: "/",
+      maxAge: sessionLifetimeMs
+    });
+  } else if (now - session.lastUsedAt.getTime() > 60 * 60 * 1000) {
+    await prisma.authSession.update({ where: { id: session.id }, data: { lastUsedAt: new Date() } });
+  }
+  return session.user;
 }
 
-async function currentUser(req: express.Request) {
-  const session = verifySession(req.cookies?.kopli_session);
-  if (!session || !prisma) return null;
-  return prisma.user.findUnique({ where: { email: session.email } });
+async function initializeDatabase() {
+  if (!prisma) return;
+  databaseStatus = "starting";
+  console.log("Applying database migrations in the background...");
+  const execute = promisify(execFile);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await execute(process.platform === "win32" ? "npx.cmd" : "npx", ["prisma", "migrate", "deploy"], {
+        cwd: root,
+        timeout: 20000,
+        maxBuffer: 1024 * 1024
+      });
+      await prisma.$connect();
+      databaseReady = true;
+      databaseStatus = "ready";
+      console.log("Database migrations applied; account and persistence features are ready.");
+      return;
+    } catch (error) {
+      databaseReady = false;
+      databaseStatus = attempt === 3 ? "unavailable" : "starting";
+      console.error(`Database initialization attempt ${attempt + 1} of 4 failed.`, error);
+      if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
+    }
+  }
+  console.error("Database remains unavailable; the server will continue to serve guest requests.");
+  const retry = setTimeout(() => { void initializeDatabase(); }, 30000);
+  retry.unref();
 }
 
 async function updateConversationSummary(userId: string, conversationId: string) {
@@ -211,6 +250,9 @@ const allowedMimeTypes = new Set([
   "application/rtf",
   "text/markdown",
   "application/json",
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/x-zip",
   "image/png",
   "image/jpeg",
   "image/webp",
@@ -221,11 +263,66 @@ function hasValidFileSignature(filePath: string, mimeType: string) {
   if (mimeType === "image/png") return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
   if (mimeType === "image/jpeg") return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   if (mimeType === "image/webp") return bytes.length >= 12 && bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP";
+  if (mimeType === "image/gif") return bytes.length >= 6 && ["GIF87a", "GIF89a"].includes(bytes.subarray(0, 6).toString());
   if (mimeType === "application/pdf") return bytes.subarray(0, 5).toString().startsWith("%PDF");
-  if (mimeType.includes("officedocument") || mimeType.includes("msword") || mimeType.includes("ms-excel") || mimeType.includes("ms-powerpoint")) {
-    return bytes.subarray(0, 4).equals(Buffer.from([0x50,0x4b,0x03,0x04]));
+  if (mimeType.includes("officedocument") || mimeType.includes("zip")) {
+    return bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && [0x03,0x05,0x07].includes(bytes[2]) && [0x04,0x06,0x08].includes(bytes[3]);
+  }
+  if (mimeType.includes("msword") || mimeType.includes("ms-excel") || mimeType.includes("ms-powerpoint")) {
+    return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1]));
   }
   return ["text/plain","text/csv","text/markdown","application/json","text/rtf","application/rtf"].includes(mimeType);
+}
+
+const zipTextExtensions = new Set([".txt", ".md", ".csv", ".json", ".xml", ".html", ".css", ".js", ".ts", ".tsx", ".jsx", ".py", ".java", ".go", ".rs", ".sql", ".yaml", ".yml", ".toml"]);
+export function extractTextFromZipArchive(bytes: Buffer) {
+  if (bytes.length < 22) throw new Error("This ZIP archive is invalid.");
+  const minimumEocd = Math.max(0, bytes.length - 22 - 65535);
+  let eocd = -1;
+  for (let offset = bytes.length - 22; offset >= minimumEocd; offset -= 1) {
+    if (bytes.readUInt32LE(offset) === 0x06054b50) { eocd = offset; break; }
+  }
+  if (eocd < 0) throw new Error("This ZIP archive is invalid or uses an unsupported ZIP64 format.");
+  const entryCount = bytes.readUInt16LE(eocd + 10);
+  let cursor = bytes.readUInt32LE(eocd + 16);
+  const sections: string[] = [];
+  let totalOutput = 0;
+  for (let index = 0; index < Math.min(entryCount, 200); index += 1) {
+    if (cursor + 46 > bytes.length || bytes.readUInt32LE(cursor) !== 0x02014b50) break;
+    const flags = bytes.readUInt16LE(cursor + 8);
+    const method = bytes.readUInt16LE(cursor + 10);
+    const compressedSize = bytes.readUInt32LE(cursor + 20);
+    const uncompressedSize = bytes.readUInt32LE(cursor + 24);
+    const nameLength = bytes.readUInt16LE(cursor + 28);
+    const extraLength = bytes.readUInt16LE(cursor + 30);
+    const commentLength = bytes.readUInt16LE(cursor + 32);
+    const localHeaderOffset = bytes.readUInt32LE(cursor + 42);
+    const fileName = bytes.subarray(cursor + 46, cursor + 46 + nameLength).toString("utf8");
+    cursor += 46 + nameLength + extraLength + commentLength;
+    const extension = path.extname(fileName).toLowerCase();
+    if (!zipTextExtensions.has(extension) || fileName.endsWith("/") || (flags & 1) !== 0) continue;
+    if (uncompressedSize > 1024 * 1024 || totalOutput + uncompressedSize > 5 * 1024 * 1024) continue;
+    if (localHeaderOffset + 30 > bytes.length || bytes.readUInt32LE(localHeaderOffset) !== 0x04034b50) continue;
+    const localNameLength = bytes.readUInt16LE(localHeaderOffset + 26);
+    const localExtraLength = bytes.readUInt16LE(localHeaderOffset + 28);
+    const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (dataEnd > bytes.length) continue;
+    const compressed = bytes.subarray(dataStart, dataEnd);
+    let content: Buffer;
+    if (method === 0) content = compressed;
+    else if (method === 8) {
+      try { content = inflateRawSync(compressed, { maxOutputLength: Math.min(1024 * 1024, 5 * 1024 * 1024 - totalOutput) }); }
+      catch { continue; }
+    } else continue;
+    if (content.length > 1024 * 1024 || totalOutput + content.length > 5 * 1024 * 1024 || content.includes(0)) continue;
+    totalOutput += content.length;
+    const decoded = content.toString("utf8").replace(/<[^>]*>/g, " ").replace(/&(?:nbsp|amp|lt|gt|quot|apos);/g, entity => ({ "&nbsp;":" ", "&amp;":"&", "&lt;":"<", "&gt;":">", "&quot;":"\"", "&apos;":"'" }[entity] || entity)).replace(/\s+/g, " ").trim();
+    if (decoded) sections.push(`## ${path.basename(fileName)}\n${decoded}`);
+    if (sections.length >= 30) break;
+  }
+  if (!sections.length) throw new Error("No supported readable text files were found in this ZIP archive.");
+  return sections.join("\n\n");
 }
 
 const upload = multer({
@@ -534,13 +631,15 @@ app.get("/api/status", async (_req, res) => {
   });
 });
 
-app.post("/api/auth/register", async (req, res) => {
+const authRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-7", legacyHeaders: false });
+
+app.post("/api/auth/register", authRateLimit, async (req, res) => {
   const email = String(req.body?.email || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
   const name = String(req.body?.name || "").trim().slice(0, 100);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
   if (password.length < 12) return res.status(400).json({ error: "Password must contain at least 12 characters." });
-  if (!prisma) return res.status(503).json({ error: "Account database is not configured." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: "Account service is unavailable while its database connection is being restored." });
   try {
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(409).json({ error: "An account with this email already exists." });
@@ -548,20 +647,21 @@ app.post("/api/auth/register", async (req, res) => {
     const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
     const role = ownerEmail && email === ownerEmail ? "owner" : "user";
     const user = await prisma.user.create({ data: { email, name, passwordHash, role } });
-    const sessionId = crypto.randomUUID();
-    const expiresAt = Date.now() + 12 * 60 * 60 * 1000;
-    sessionStore.set(sessionId, { email: user.email, role: role as "user" | "owner", expiresAt });
-    res.cookie("kopli_session", signSession(sessionId, expiresAt), { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production" || req.secure, maxAge: 12 * 60 * 60 * 1000 });
+    await createSession(user.id, req, res);
     res.status(201).json({ user: { email: user.email, name: user.name, role } });
-  } catch {
+  } catch (error) {
+    console.error("Account registration failed:", error);
+    if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
+      return res.status(409).json({ error: "An account with this email already exists." });
+    }
     res.status(500).json({ error: "Account registration failed." });
   }
 });
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", authRateLimit, async (req, res) => {
   const email = String(req.body?.email || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
-  if (!prisma) return res.status(503).json({ error: "Account database is not configured." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: "Account service is unavailable while its database connection is being restored." });
   try {
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user?.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
@@ -569,61 +669,126 @@ app.post("/api/auth/login", async (req, res) => {
     }
     const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
     const role: "user" | "owner" = ownerEmail && user.email === ownerEmail ? "owner" : "user";
-    if (role === "owner" && user.role !== "owner") {
-      await prisma.user.update({ where: { id: user.id }, data: { role: "owner" } });
-    }
-    const sessionId = crypto.randomUUID();
-    const expiresAt = Date.now() + 12 * 60 * 60 * 1000;
-    sessionStore.set(sessionId, { email: user.email, role, expiresAt });
-    res.cookie("kopli_session", signSession(sessionId, expiresAt), { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production" || req.secure, maxAge: 12 * 60 * 60 * 1000 });
+    if (user.role !== role) await prisma.user.update({ where: { id: user.id }, data: { role } });
+    await createSession(user.id, req, res);
     res.json({ user: { email: user.email, name: user.name, role } });
-  } catch {
+  } catch (error) {
+    console.error("Account login failed:", error);
     res.status(500).json({ error: "Login failed." });
   }
 });
 
 app.get("/api/auth/me", async (req, res) => {
-  const user = await currentUser(req);
+  if (!prisma || !databaseReady) return res.status(503).json({ error: "Account service is unavailable while its database connection is being restored." });
+  const user = await currentUser(req, res);
   if (!user) return res.json({ authenticated: false });
   res.json({ authenticated: true, user: { email: user.email, name: user.name, role: user.role } });
 });
 
+app.post("/api/auth/forgot-password", authRateLimit, async (req, res) => {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: "Password recovery is unavailable while the account database is disconnected." });
+  if (!configured(process.env.RESEND_API_KEY) || !configured(process.env.RESEND_FROM_EMAIL)) {
+    return res.status(503).json({ error: "Password recovery email is not configured. Set RESEND_API_KEY and a verified RESEND_FROM_EMAIL on the server." });
+  }
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user) return res.json({ message: "If an account exists for that email, a password reset link has been sent." });
+
+  const token = crypto.randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+  await prisma.passwordResetToken.deleteMany({ where: { userId: user.id, expiresAt: { lte: new Date() } } });
+  await prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash: hashToken(token), expiresAt } });
+  const appUrl = process.env.APP_URL || "https://kopli-ai-1.onrender.com";
+  const resetUrl = new URL("/", appUrl);
+  resetUrl.searchParams.set("resetToken", token);
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(12000),
+      body: JSON.stringify({
+        from: process.env.RESEND_FROM_EMAIL,
+        to: [user.email],
+        subject: "Reset your KOPLI AI password",
+        text: `Use this secure link to create a new KOPLI AI password. It expires in 30 minutes.\n\n${resetUrl.toString()}\n\nIf you did not request this, you can ignore this email.`,
+        html: `<p>Use this secure link to create a new KOPLI AI password. It expires in 30 minutes.</p><p><a href="${resetUrl.toString()}">Create a new password</a></p><p>If you did not request this, you can ignore this email.</p>`
+      })
+    });
+    if (!response.ok) {
+      await prisma.passwordResetToken.deleteMany({ where: { tokenHash: hashToken(token) } });
+      console.error("Password recovery email provider returned:", response.status);
+      return res.status(502).json({ error: "The recovery email could not be sent. Check the verified sender configuration and try again." });
+    }
+    res.json({ message: "If an account exists for that email, a password reset link has been sent." });
+  } catch (error) {
+    await prisma.passwordResetToken.deleteMany({ where: { tokenHash: hashToken(token) } });
+    console.error("Password recovery email request failed:", error);
+    res.status(502).json({ error: "The recovery email could not be sent. Please try again." });
+  }
+});
+
+app.post("/api/auth/reset-password", authRateLimit, async (req, res) => {
+  const token = String(req.body?.token || "");
+  const password = String(req.body?.password || "");
+  if (!token) return res.status(400).json({ error: "The password reset link is missing its token." });
+  if (password.length < 12) return res.status(400).json({ error: "Password must contain at least 12 characters." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: "Password reset is unavailable while the account database is disconnected." });
+  const resetToken = await prisma.passwordResetToken.findFirst({
+    where: { tokenHash: hashToken(token), usedAt: null, expiresAt: { gt: new Date() } }
+  });
+  if (!resetToken) return res.status(400).json({ error: "This reset link is invalid or has expired. Request a new link." });
+  const passwordHash = await bcrypt.hash(password, 12);
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: resetToken.userId }, data: { passwordHash } }),
+    prisma.authSession.deleteMany({ where: { userId: resetToken.userId } }),
+    prisma.passwordResetToken.update({ where: { id: resetToken.id }, data: { usedAt: new Date() } }),
+    prisma.passwordResetToken.deleteMany({ where: { userId: resetToken.userId, id: { not: resetToken.id } } })
+  ]);
+  res.json({ message: "Your password was updated. Sign in with your new password." });
+});
+
 app.get("/api/admin/users", async (req, res) => {
-  const session = verifySession(req.cookies?.kopli_session);
-  if (!session || session.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
-  if (!prisma) return res.json({ users: [] });
+  const sessionUser = await currentUser(req);
+  if (!sessionUser || sessionUser.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
+  if (!prisma) return res.status(503).json({ error: "Database is unavailable." });
   const users = await prisma.user.findMany({ orderBy: { createdAt: "desc" }, select: { id: true, email: true, name: true, role: true, createdAt: true } });
   res.json({ users });
 });
 
 app.patch("/api/admin/users/:id", async (req, res) => {
-  const session = verifySession(req.cookies?.kopli_session);
-  if (!session || session.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
+  const sessionUser = await currentUser(req);
+  if (!sessionUser || sessionUser.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
   if (!prisma) return res.status(503).json({ error: "Database is unavailable." });
   const id = path.basename(req.params.id);
   const role = req.body?.role;
   if (role !== undefined && role !== "user" && role !== "owner") return res.status(400).json({ error: "Invalid role." });
   const target = await prisma.user.findUnique({ where: { id }, select: { email: true } });
   if (!target) return res.status(404).json({ error: "User not found." });
-  if (target.email === session.email) return res.status(400).json({ error: "Administrator cannot change their own role." });
+  if (target.email === sessionUser.email) return res.status(400).json({ error: "Administrator cannot change their own role." });
   const user = await prisma.user.update({ where: { id }, data: role ? { role } : {} }).catch(() => null);
   if (!user) return res.status(404).json({ error: "User not found." });
   res.json({ user: { id: user.id, email: user.email, name: user.name, role: user.role } });
 });
 
-app.post("/api/auth/logout", (req, res) => {
+app.post("/api/auth/logout", async (req, res) => {
   const token = req.cookies?.kopli_session;
-  if (token) {
-    const parts = token.split(".");
-    if (parts[0]) sessionStore.delete(parts[0]);
+  if (token && prisma && databaseReady) {
+    try {
+      await prisma.authSession.deleteMany({ where: { tokenHash: hashToken(token) } });
+    } catch (error) {
+      console.error("Could not invalidate account session:", error);
+      res.clearCookie("kopli_session", { path: "/", secure: securityConfig.isProduction || req.secure, sameSite: "lax" });
+      return res.status(503).json({ error: "The session cookie was cleared, but the server could not confirm session invalidation." });
+    }
   }
-  res.clearCookie("kopli_session");
+  res.clearCookie("kopli_session", { path: "/", secure: securityConfig.isProduction || req.secure, sameSite: "lax" });
   res.json({ loggedOut: true });
 });
 
-app.get("/api/admin/status", (req, res) => {
-  const session = verifySession(req.cookies?.kopli_session);
-  if (!session || session.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
+app.get("/api/admin/status", async (req, res) => {
+  const sessionUser = await currentUser(req);
+  if (!sessionUser || sessionUser.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
   res.json({ authorized: true, providerStatus: {
     groq: configured(process.env.GROQ_API_KEY),
     tavily: configured(process.env.TAVILY_API_KEY),
@@ -633,15 +798,15 @@ app.get("/api/admin/status", (req, res) => {
 });
 
 app.post("/api/chat", async (req, res) => {
-  const { conversationId, message, mode = "smart", history = [] } = req.body as {
+  const { conversationId, message, mode = "smart", history = [], attachments = [] } = req.body as {
     conversationId?: string; message?: string; mode?: string; history?: Array<{ role: "user" | "assistant"; content: string }>;
+    attachments?: Array<{ id?: string; mimeType?: string; fileName?: string }>;
   };
   if (!message?.trim()) return res.status(400).json({ error: "Message cannot be empty." });
   const authenticatedUser = await currentUser(req);
   if (message.trim() === "/admin") {
-    const session = verifySession(req.cookies?.kopli_session);
     const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
-    const authorized = Boolean(session && session.role === "owner" && ownerEmail && session.email === ownerEmail);
+    const authorized = Boolean(authenticatedUser && authenticatedUser.role === "owner" && ownerEmail && authenticatedUser.email === ownerEmail);
     res.setHeader("Content-Type", "application/json");
     return res.status(authorized ? 200 : 403).json({
       authorized,
@@ -649,6 +814,32 @@ app.post("/api/chat", async (req, res) => {
       openAdmin: authorized
     });
   }
+  if (!Array.isArray(attachments) || attachments.length > 10) return res.status(400).json({ error: "Attach up to 10 files per message." });
+  const imageInputs: Array<{ mimeType: string; dataUrl: string }> = [];
+  let totalImageBytes = 0;
+  for (const attachment of attachments) {
+    const fileId = path.basename(String(attachment?.id || ""));
+    if (!fileId || fileId !== attachment.id) return res.status(400).json({ error: "An attachment reference is invalid." });
+    const filePath = path.join(uploads, fileId);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "An uploaded attachment has expired. Please attach it again." });
+    const storedFile = prisma && databaseReady ? await prisma.storedFile.findUnique({ where: { id: fileId } }) : null;
+    if (authenticatedUser && (!storedFile || storedFile.userId !== authenticatedUser.id)) return res.status(404).json({ error: "An uploaded attachment was not found." });
+    if (!authenticatedUser && storedFile?.userId) return res.status(404).json({ error: "An uploaded attachment was not found." });
+    const mimeType = storedFile?.mimeType || String(attachment?.mimeType || "");
+    if (!allowedMimeTypes.has(mimeType) || !hasValidFileSignature(filePath, mimeType)) {
+      return res.status(422).json({ error: "An attachment failed its type or file-integrity check. Please attach it again." });
+    }
+    if (!mimeType.startsWith("image/")) continue;
+    if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) {
+      return res.status(415).json({ error: "Image analysis supports JPEG, PNG, and WEBP files. Convert this image and attach it again." });
+    }
+    if (imageInputs.length >= 3) return res.status(400).json({ error: "Attach up to 3 images in one message." });
+    const bytes = fs.readFileSync(filePath);
+    totalImageBytes += bytes.length;
+    if (totalImageBytes > 15 * 1024 * 1024) return res.status(413).json({ error: "Keep attached images under 15 MB combined for reliable AI analysis." });
+    imageInputs.push({ mimeType, dataUrl: `data:${mimeType};base64,${bytes.toString("base64")}` });
+  }
+  if (imageInputs.length && !groq) return res.status(503).json({ error: "Image analysis is unavailable because the Groq AI provider is not configured." });
   const id = conversationId || crypto.randomUUID();
   let safeHistory = Array.isArray(history)
     ? history.filter(item =>
@@ -733,12 +924,14 @@ app.post("/api/chat", async (req, res) => {
     }
   } else {
     try {
-      const system = mode === "coding"
+      const system = imageInputs.length
+        ? "You are KOPLI AI, created and owned by Pranesh KK. Analyze the attached images carefully and answer the user's question. Be clear about visual uncertainty and do not claim to see details that are not visible."
+        : mode === "coding"
         ? "You are KOPLI AI, created and owned by Pranesh KK. Be precise and helpful for programming tasks."
         : mode === "reasoning"
           ? "You are KOPLI AI, created and owned by Pranesh KK. Reason carefully and explain complex topics step by step."
           : mode === "vision"
-            ? "You are KOPLI AI, created and owned by Pranesh KK. You cannot view or analyze images unless a compatible vision model and image attachment context are explicitly configured. Clearly state this limitation."
+            ? "You are KOPLI AI, created and owned by Pranesh KK. If no image is attached, ask the user to attach a JPEG, PNG, or WEBP image before requesting visual analysis."
             : mode === "research"
               ? "You are KOPLI AI, created and owned by Pranesh KK. Be precise, distinguish facts from uncertainty, and do not invent sources."
               : "You are KOPLI AI, created and owned by Pranesh KK. Be clear, accurate, and helpful.";
@@ -785,13 +978,16 @@ app.post("/api/chat", async (req, res) => {
         }
         if (preference?.learning && preference.language) memoryContext += `\n\nSaved language preference: ${preference.language}`;
       }
-      const messages = [
+      const userContent = imageInputs.length
+        ? [{ type: "text", text: message }, ...imageInputs.map(item => ({ type: "image_url", image_url: { url: item.dataUrl } }))]
+        : message;
+      const messages: any[] = [
         { role: "system" as const, content: system + memoryContext },
         ...safeHistory,
-        { role: "user" as const, content: message }
+        { role: "user" as const, content: userContent }
       ];
       const stream = await groq.chat.completions.create({
-        model: aiConfig.groqModel,
+        model: imageInputs.length ? aiConfig.groqVisionModel : aiConfig.groqModel,
         messages,
         temperature: mode === "coding" ? 0.2 : mode === "reasoning" ? 0.4 : 0.7,
         ...(mode === "fast" ? { max_tokens: 800 } : {}),
@@ -1097,11 +1293,11 @@ app.get("/api/images/:imageId", async (req, res) => {
 
 app.post("/api/upload", upload.array("files", 10), async (req, res) => {
   const user = await currentUser(req);
-  if (!user) return res.status(401).json({ error: "Sign in to upload files." });
-  const files = (req.files as Express.Multer.File[] || []).flatMap(file => {
+  const rawFiles = req.files as Express.Multer.File[] || [];
+  const files = rawFiles.flatMap(file => {
     const filePath = path.join(uploads, file.filename);
     if (!hasValidFileSignature(filePath, file.mimetype)) {
-      fs.unlinkSync(filePath);
+      fs.rmSync(filePath, { force: true });
       return [];
     }
     return [{
@@ -1112,9 +1308,17 @@ app.post("/api/upload", upload.array("files", 10), async (req, res) => {
       url: `/api/files/${file.filename}`
     }];
   });
-  if (prisma) {
-    for (const item of files) {
-      await prisma.storedFile.create({ data: { id: item.id, userId: user.id, name: item.id, mimeType: item.mimeType, size: item.size, path: path.join(uploads, item.id), kind: "upload" } }).catch(() => undefined);
+  if (files.length !== rawFiles.length) {
+    for (const file of rawFiles) fs.rmSync(path.join(uploads, file.filename), { force: true });
+    return res.status(422).json({ error: "One or more files failed MIME and file-signature validation. No files were attached." });
+  }
+  if (prisma && databaseReady && user) {
+    try {
+      await prisma.storedFile.createMany({ data: files.map(item => ({ id: item.id, userId: user.id, name: item.id, mimeType: item.mimeType, size: item.size, path: path.join(uploads, item.id), kind: "upload" })) });
+    } catch (error) {
+      for (const item of files) fs.rmSync(path.join(uploads, item.id), { force: true });
+      console.error("Could not record uploaded files:", error);
+      return res.status(500).json({ error: "The files could not be safely saved. Please try again." });
     }
   }
   if (!files.length) return res.status(422).json({ error: "No uploaded file passed MIME and file-signature validation." });
@@ -1123,12 +1327,13 @@ app.post("/api/upload", upload.array("files", 10), async (req, res) => {
 
 app.post("/api/files/:fileId/analyze", async (req, res) => {
   const user = await currentUser(req);
-  if (!user) return res.status(401).json({ error: "Sign in to analyze files." });
-  if (prisma) { const owned = await prisma.storedFile.findFirst({ where: { id: path.basename(req.params.fileId), userId: user.id } }); if (!owned) return res.status(404).json({ error: "Uploaded file not found." }); }
   const fileId = path.basename(req.params.fileId);
+  const storedFile = prisma && databaseReady ? await prisma.storedFile.findUnique({ where: { id: fileId } }) : null;
+  if (user && (!storedFile || storedFile.userId !== user.id)) return res.status(404).json({ error: "Uploaded file not found." });
+  if (!user && storedFile?.userId) return res.status(404).json({ error: "Uploaded file not found." });
   const file = path.join(uploads, fileId);
   if (!fs.existsSync(file)) return res.status(404).json({ error: "Uploaded file not found." });
-  const mimeType = req.body?.mimeType || "";
+  const mimeType = storedFile?.mimeType || String(req.body?.mimeType || "");
   try {
     let text = "";
     let method = "";
@@ -1152,9 +1357,12 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
     } else if (/\.txt|\.md|\.rtf|\.json|\.csv$/i.test(fileId) || ["text/plain","text/markdown","text/rtf","application/rtf","application/json","text/csv"].includes(mimeType)) {
       text = fs.readFileSync(file, "utf8");
       method = "Text extraction";
-    } else if (/\.pptx$/i.test(fileId)) {
-      text = "";
-      method = "PPTX extraction unavailable";
+    } else if (mimeType.includes("presentationml") || /\.pptx$/i.test(fileId)) {
+      text = extractTextFromZipArchive(fs.readFileSync(file));
+      method = "PPTX text extraction";
+    } else if (mimeType === "application/zip" || mimeType === "application/x-zip-compressed" || mimeType === "application/x-zip") {
+      text = extractTextFromZipArchive(fs.readFileSync(file));
+      method = "ZIP text extraction";
     } else {
       return res.status(422).json({ error: "This file type cannot be analyzed by the configured text extractor." });
     }
@@ -1514,6 +1722,23 @@ app.delete("/api/library/:fileName", async (req, res) => {
   res.status(404).json({ error: "File not found." });
 });
 
+app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) return next(error);
+  if (error instanceof multer.MulterError) {
+    const tooLarge = error.code === "LIMIT_FILE_SIZE";
+    return res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? "Each file must be 25 MB or smaller." : "The upload could not be accepted. Attach up to 10 files at a time." });
+  }
+  const status = error && typeof error === "object" && "status" in error ? Number(error.status) : 500;
+  console.error("Unhandled request error:", error);
+  res.status(status >= 400 && status < 600 ? status : 500).json({ error: status === 413 ? "The request is too large." : "The request could not be completed." });
+});
+
+app.get("/health", (_req, res) => res.json({
+  status: databaseStatus === "unavailable" ? "degraded" : databaseStatus === "starting" ? "starting" : "ok",
+  ready: true,
+  persistence: databaseStatus
+}));
+
 app.use(express.static(path.join(root, "dist")));
 app.get("/chat/:mode", (_req, res) => {
   const indexFile = path.join(root, "dist", "index.html");
@@ -1529,5 +1754,8 @@ app.use((_req, res) => {
 export { app };
 const port = Number(process.env.PORT || 8787);
 if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
-  app.listen(port, () => console.log(`KOPLI AI server listening on http://localhost:${port}`));
+  app.listen(port, () => {
+    console.log(`KOPLI AI server listening on http://localhost:${port}`);
+    void initializeDatabase();
+  });
 }

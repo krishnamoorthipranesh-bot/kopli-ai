@@ -26,7 +26,10 @@ With no provider keys configured, chat works in clearly labeled demo mode. Searc
 ## Provider environment variables
 
 - `GROQ_API_KEY`: Groq text generation
+- `GROQ_VISION_MODEL`: optional Groq vision model override; defaults to `qwen/qwen3.8-27b`
 - `TAVILY_API_KEY`: real-time web search
 - `STABILITY_API_KEY`: Stability text-to-image
-- `DATABASE_URL`: reserved PostgreSQL/Prisma integration
+- `DATABASE_URL`: PostgreSQL/Prisma persistence for accounts, sessions, conversations, and saved files
+- `RESEND_API_KEY` and `RESEND_FROM_EMAIL`: password recovery email delivery; the sender must be verified with Resend
+- `APP_URL`: public app origin used in password recovery links; defaults to the production site
 - `PORT`: backend port, default `8787`

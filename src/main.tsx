@@ -3,8 +3,8 @@ import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  ArrowLeft, Bell, Brain, Check, ChevronDown, ChevronLeft, ChevronRight, Code2,
-  Copy, Download, Eye, FileText, Globe2, Image as ImageIcon, Library,
+  ArrowLeft, Bell, Brain, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Code2,
+  Copy, Download, Eye, EyeOff, FileText, Files, Globe2, Image as ImageIcon, Images, Library,
   LogIn, LogOut, Menu, Mic, Moon, CircleHelp, MoreHorizontal, Plus, Search,
   Send, Settings, Shield, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
   UserRound, Volume2, X, Zap
@@ -36,6 +36,7 @@ interface ChatMessage {
   content: string;
   createdAt?: string;
   sources?: Source[];
+  attachments?: Array<{ fileName: string; mimeType: string; previewUrl?: string }>;
   streaming?: boolean;
 }
 
@@ -84,6 +85,7 @@ interface UploadedFile {
   mimeType: string;
   size: number;
   url: string;
+  previewUrl?: string;
 }
 
 interface ApiErrorBody {
@@ -116,12 +118,24 @@ class ApiError extends Error {
   }
 }
 
-async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(url: string, init: RequestInit = {}, timeoutMs = 30000): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const response = await fetch(url, { ...init, credentials: "include", headers });
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  const abort = () => controller.abort();
+  init.signal?.addEventListener("abort", abort, { once: true });
+  let response: Response;
+  try { response = await fetch(url, { ...init, credentials: "include", headers, signal: controller.signal }); }
+  catch (error) {
+    if (controller.signal.aborted) throw new Error("The server request timed out or was cancelled. Please try again.");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+    init.signal?.removeEventListener("abort", abort);
+  }
   if (response.status === 204) return undefined as T;
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
@@ -131,6 +145,43 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(message, response.status);
   }
   return body as T;
+}
+
+async function requestWithRetry<T>(url: string, attempts = 3, signal?: AbortSignal): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (signal?.aborted) throw new Error("Request cancelled.");
+    try { return await request<T>(url, { method: "GET", signal }, 5000); }
+    catch (error) {
+      lastError = error;
+      if (error instanceof ApiError && error.status < 500) throw error;
+      if (attempt < attempts - 1) await new Promise(resolve => window.setTimeout(resolve, 500 * 2 ** attempt));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("The server is not responding. Check your connection and retry.");
+}
+
+function uploadRequest<T>(form: FormData, onProgress: (percent: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload");
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = event => { if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100)); };
+    xhr.onerror = () => reject(new Error("The upload could not reach the server. Check your connection and retry."));
+    xhr.ontimeout = () => reject(new Error("The upload timed out. Try a smaller file or retry."));
+    xhr.timeout = 60000;
+    xhr.onload = () => {
+      let body: unknown;
+      try { body = JSON.parse(xhr.responseText); } catch { body = null; }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        const message = body && typeof body === "object" && "error" in body ? String((body as ApiErrorBody).error || `Upload failed (${xhr.status}).`) : `Upload failed (${xhr.status}).`;
+        reject(new ApiError(message, xhr.status));
+        return;
+      }
+      resolve(body as T);
+    };
+    xhr.send(form);
+  });
 }
 
 function jsonRequest(method: string, body?: unknown): RequestInit {
@@ -145,9 +196,16 @@ function getGuestHistory(): Conversation[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem("kopli.guest-conversations.v1") || "[]");
     if (!Array.isArray(value)) return [];
-    return value.filter((item): item is Conversation =>
+    const conversations = value.filter((item): item is Conversation =>
       item && typeof item.id === "string" && typeof item.title === "string" && Array.isArray(item.messages)
     );
+    return conversations.map(conversation => ({
+      ...conversation,
+      messages: conversation.messages.map(message => ({
+        ...message,
+        attachments: message.attachments?.map(({ fileName, mimeType }) => ({ fileName, mimeType }))
+      }))
+    }));
   } catch (error) {
     console.error("Could not read local chat history:", error);
     return [];
@@ -199,6 +257,11 @@ function MessageView({
             {message.sources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">[{index + 1}] {source.title || source.url}</a>)}
           </div>}
         </div>
+          {!!message.attachments?.length && <div className="message-attachments" aria-label="Message attachments">
+            {message.attachments.map((attachment, index) => attachment.previewUrl
+              ? <img key={`${attachment.fileName}-${index}`} src={attachment.previewUrl} alt={attachment.fileName} />
+              : <span key={`${attachment.fileName}-${index}`}><FileText size={16} />{attachment.fileName}</span>)}
+          </div>}
         {!isUser && !message.streaming && message.content && <div className="message-actions" aria-label="Response actions">
           <button type="button" aria-label="Copy response" title="Copy" onClick={() => onCopy(message.content)}><Copy size={16} /></button>
           <button type="button" aria-label="Read response aloud" title="Read aloud" onClick={() => onSpeak(message.content)}><Volume2 size={16} /></button>
@@ -215,11 +278,17 @@ function App() {
   const [authReady, setAuthReady] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [registering, setRegistering] = useState(false);
+  const [authStage, setAuthStage] = useState<"account" | "forgot" | "reset">("account");
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [authPasswordConfirmation, setAuthPasswordConfirmation] = useState("");
+  const [showAuthPassword, setShowAuthPassword] = useState(false);
+  const [resetToken, setResetToken] = useState("");
+  const [connectionStatus, setConnectionStatus] = useState<"checking" | "connected" | "degraded" | "offline">("checking");
   const [section, setSection] = useState<Section>("Chat");
   const [sidebarOpen, setSidebarOpen] = useState(() => { if (window.matchMedia("(max-width: 900px)").matches) return false; try { const saved = localStorage.getItem("kopli.sidebar"); if (saved) return saved === "open"; } catch {} return false; });
   const [mobileViewport, setMobileViewport] = useState(() => window.matchMedia("(max-width: 900px)").matches);
@@ -243,6 +312,13 @@ function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [prompt, setPrompt] = useState("");
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState("");
+  const [capturedPhoto, setCapturedPhoto] = useState<File | null>(null);
+  const [capturedPhotoUrl, setCapturedPhotoUrl] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [notice, setNotice] = useState("");
   const [preferences, setPreferences] = useState<Preference>({
@@ -281,7 +357,14 @@ function App() {
   const appRootRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const streamingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const cameraFallbackInputRef = useRef<HTMLInputElement>(null);
+  const cameraVideoRef = useRef<HTMLVideoElement>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const attachmentMenuRef = useRef<HTMLDivElement>(null);
+  const objectUrlsRef = useRef(new Set<string>());
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const stickToBottomRef = useRef(true);
@@ -307,16 +390,96 @@ function App() {
     setConversations(await request<Conversation[]>("/api/conversations"));
   }, [user]);
 
+  const checkServerConnection = useCallback(async (signal?: AbortSignal, isActive: () => boolean = () => true) => {
+    setConnectionStatus("checking");
+    try {
+      let health = await requestWithRetry<{ status: string; ready: boolean; persistence: string }>("/health", 3, signal);
+      if (!isActive()) return;
+      setConnectionStatus("connected");
+      for (let attempt = 0; health.persistence === "starting" && attempt < 6; attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, Math.min(500 * 2 ** attempt, 4000)));
+        health = await requestWithRetry<{ status: string; ready: boolean; persistence: string }>("/health", 2, signal);
+        if (!isActive()) return;
+      }
+      if (health.persistence !== "ready") {
+        const detail = health.persistence === "not_configured" ? "Account storage is not configured." : "Account storage could not be reached.";
+        setConnectionStatus("degraded");
+        setNotice(`${detail} Guest chat is available. Retry after the database connection is restored.`);
+        return;
+      }
+      try {
+        const result = await requestWithRetry<{ authenticated: boolean; user?: User }>("/api/auth/me", 2, signal);
+        if (isActive()) setUser(result.authenticated && result.user ? result.user : null);
+      } catch (error) {
+        if (isActive() && (!(error instanceof ApiError) || error.status !== 401)) {
+          setConnectionStatus("degraded");
+          setNotice("The server is online, but your account session could not be restored. Retry to check again.");
+        }
+      }
+    } catch (error) {
+      if (isActive()) {
+        setConnectionStatus("offline");
+        setNotice(`KOPLI AI could not reach the server: ${errorText(error)}`);
+      }
+    } finally {
+      if (isActive()) setAuthReady(true);
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
-    request<{ authenticated: boolean; user?: User }>("/api/auth/me")
-      .then(result => { if (active && result.authenticated && result.user) setUser(result.user); })
-      .catch(error => {
-        if (active && (!(error instanceof ApiError) || error.status !== 401)) setNotice(errorText(error));
-      })
-      .finally(() => { if (active) setAuthReady(true); });
-    return () => { active = false; };
+    const controller = new AbortController();
+    void checkServerConnection(controller.signal, () => active);
+    return () => { active = false; controller.abort(); };
+  }, [checkServerConnection]);
+
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("resetToken");
+    if (!token) return;
+    setResetToken(token);
+    setAuthStage("reset");
+    setRegistering(false);
+    setAuthPassword("");
+    setAuthPasswordConfirmation("");
+    setAuthOpen(true);
   }, []);
+
+  useEffect(() => {
+    if (!cameraOpen || capturedPhoto) return;
+    let cancelled = false;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError("Camera preview is not supported by this browser. You can still use the device camera picker.");
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false })
+      .then(stream => {
+        if (cancelled) { stream.getTracks().forEach(track => track.stop()); return; }
+        cameraStreamRef.current = stream;
+        const video = cameraVideoRef.current;
+        if (video) { video.srcObject = stream; void video.play().catch(error => setCameraError(errorText(error))); }
+        setCameraError("");
+      })
+      .catch(error => {
+        if (cancelled) return;
+        setCameraError(error instanceof Error && error.name === "NotAllowedError"
+          ? "Camera access was blocked. Allow camera access or open the device camera picker."
+          : "The camera could not be opened. Try the device camera picker instead.");
+      });
+    return () => {
+      cancelled = true;
+      cameraStreamRef.current?.getTracks().forEach(track => track.stop());
+      cameraStreamRef.current = null;
+    };
+  }, [cameraOpen, capturedPhoto]);
+
+  useEffect(() => {
+    if (!attachmentMenuOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!attachmentMenuRef.current?.contains(event.target as Node)) setAttachmentMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [attachmentMenuOpen]);
 
   useEffect(() => {
     const viewport = window.matchMedia("(max-width: 900px)");
@@ -439,6 +602,8 @@ function App() {
 
   useEffect(() => () => {
     if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
+    cameraStreamRef.current?.getTracks().forEach(track => track.stop());
+    objectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     if ("speechSynthesis" in window) speechSynthesis.cancel();
   }, []);
 
@@ -451,8 +616,10 @@ function App() {
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
-        if (memoryOpen) setMemoryOpen(false);
-        else if (authOpen) setAuthOpen(false);
+        if (cameraOpen) closeCamera();
+        else if (attachmentMenuOpen) setAttachmentMenuOpen(false);
+        else if (memoryOpen) setMemoryOpen(false);
+        else if (authOpen) closeAuthDialog();
         else if (headerModeOpen) setHeaderModeOpen(false);
         else if (composerModeOpen) setComposerModeOpen(false);
         else if (mobileViewport) setSidebarOpen(false);
@@ -474,7 +641,7 @@ function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [authOpen, composerModeOpen, headerModeOpen, memoryOpen, mobileViewport]);
+  }, [authOpen, attachmentMenuOpen, cameraOpen, composerModeOpen, headerModeOpen, memoryOpen, mobileViewport]);
 
   function newChat() {
     abortRef.current?.abort();
@@ -523,56 +690,138 @@ function App() {
     } catch (error) { setNotice(errorText(error)); }
   }
 
-  async function uploadFiles(event: ChangeEvent<HTMLInputElement>) {
+  async function uploadSelectedFiles(selected: File[]): Promise<boolean> {
+    if (!selected.length || uploadBusy) return false;
+    const maxAttachments = 10 - uploadedFiles.length;
+    const imageCount = uploadedFiles.filter(file => file.mimeType.startsWith("image/")).length;
+    const supported = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv|json|zip|rtf|md|png|jpe?g|webp|gif)$/i;
+    const accepted: File[] = [];
+    for (const file of selected) {
+      if (!supported.test(file.name)) { setNotice(`${file.name} is not a supported attachment type.`); continue; }
+      if (file.size > 25 * 1024 * 1024) { setNotice(`${file.name} is larger than the 25 MB file limit.`); continue; }
+      if (uploadedFiles.length + accepted.length >= 10) { setNotice("Attach up to 10 files per message."); break; }
+      if (file.type.startsWith("image/") && imageCount + accepted.filter(item => item.type.startsWith("image/")).length >= 3) {
+        setNotice("Attach up to 3 images in one message."); continue;
+      }
+      accepted.push(file);
+    }
+    if (!accepted.length) return false;
+    if (accepted.length > maxAttachments) accepted.length = maxAttachments;
+    const form = new FormData();
+    accepted.forEach(file => form.append("files", file));
+    setUploadBusy(true);
+    setUploadProgress(0);
+    setAttachmentMenuOpen(false);
+    try {
+      const result = await uploadRequest<{ files: UploadedFile[] }>(form, setUploadProgress);
+      const uploaded = result.files.map((file, index) => {
+        const source = accepted[index];
+        const previewUrl = source?.type.startsWith("image/") ? URL.createObjectURL(source) : undefined;
+        if (previewUrl) objectUrlsRef.current.add(previewUrl);
+        return { ...file, previewUrl };
+      });
+      setUploadedFiles(previous => [...previous, ...uploaded].slice(0, 10));
+      return true;
+    } catch (error) { setNotice(errorText(error)); return false; }
+    finally { setUploadBusy(false); setUploadProgress(0); }
+  }
+
+  function uploadFiles(event: ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(event.currentTarget.files || []);
     event.currentTarget.value = "";
-    if (!selected.length) return;
-    const form = new FormData();
-    selected.slice(0, 10).forEach(file => form.append("files", file));
-    try {
-      const result = await request<{ files: UploadedFile[] }>("/api/upload", { method: "POST", body: form });
-      setUploadedFiles(previous => [...previous, ...result.files].slice(0, 10));
-    } catch (error) { setNotice(errorText(error)); }
+    void uploadSelectedFiles(selected);
+  }
+
+  function closeCamera() {
+    cameraStreamRef.current?.getTracks().forEach(track => track.stop());
+    cameraStreamRef.current = null;
+    if (capturedPhotoUrl) {
+      URL.revokeObjectURL(capturedPhotoUrl);
+      objectUrlsRef.current.delete(capturedPhotoUrl);
+    }
+    setCapturedPhotoUrl("");
+    setCapturedPhoto(null);
+    setCameraOpen(false);
+  }
+
+  function captureCameraPhoto() {
+    const video = cameraVideoRef.current;
+    if (!video?.videoWidth || !video.videoHeight) { setCameraError("The camera preview is not ready yet. Wait a moment and try again."); return; }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const context = canvas.getContext("2d");
+    if (!context) { setCameraError("This browser cannot process the camera image."); return; }
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(blob => {
+      if (!blob) { setCameraError("The photo could not be captured. Please try again."); return; }
+      const photo = new File([blob], `kopli-photo-${Date.now()}.jpg`, { type: "image/jpeg" });
+      const previewUrl = URL.createObjectURL(photo);
+      objectUrlsRef.current.add(previewUrl);
+      setCapturedPhoto(photo);
+      setCapturedPhotoUrl(previewUrl);
+      cameraStreamRef.current?.getTracks().forEach(track => track.stop());
+      cameraStreamRef.current = null;
+    }, "image/jpeg", 0.92);
+  }
+
+  async function useCameraPhoto() {
+    if (!capturedPhoto) return;
+    const photo = capturedPhoto;
+    if (await uploadSelectedFiles([photo])) closeCamera();
+  }
+
+  function removeUploadedFile(file: UploadedFile) {
+    if (file.previewUrl) {
+      URL.revokeObjectURL(file.previewUrl);
+      objectUrlsRef.current.delete(file.previewUrl);
+    }
+    setUploadedFiles(previous => previous.filter(item => item.id !== file.id));
   }
 
   async function sendMessage(event?: FormEvent) {
     event?.preventDefault();
     const text = prompt.trim();
-    if ((!text && !uploadedFiles.length) || streaming) return;
+    if ((!text && !uploadedFiles.length) || streaming || streamingRef.current || uploadBusy) return;
     let submittedText = text || "Please review the attached file.";
     const files = uploadedFiles;
     stickToBottomRef.current = true;
     setShowScrollToLatest(false);
     setPrompt("");
     setUploadedFiles([]);
+    streamingRef.current = true;
     setStreaming(true);
     const conversationId = activeId || makeId();
-    const userMessage: ChatMessage = { id: makeId(), role: "user", content: text || "Please review the attached file.", createdAt: new Date().toISOString() };
+    const userMessage: ChatMessage = {
+      id: makeId(), role: "user", content: text || "Please review the attached file.", createdAt: new Date().toISOString(),
+      attachments: files.map(file => ({ fileName: file.fileName, mimeType: file.mimeType, previewUrl: file.previewUrl }))
+    };
     const assistantId = makeId();
     setActiveId(conversationId);
     setSection("Chat");
     setMessages(previous => [...previous, userMessage, { id: assistantId, role: "assistant", content: "", streaming: true }]);
     const controller = new AbortController();
     abortRef.current = controller;
+    const requestTimeout = window.setTimeout(() => controller.abort(), 120000);
     try {
+      await requestWithRetry<{ status: string }>("/health", 2, controller.signal);
       for (const file of files) {
-        if (file.mimeType.startsWith("image/")) {
-          submittedText += `\n\n[Attached image: ${file.fileName}. Image bytes are not sent to this chat endpoint.]`;
-          continue;
-        }
+        if (file.mimeType.startsWith("image/")) continue;
         const analysis = await request<{ text: string; truncated: boolean }>(
           `/api/files/${encodeURIComponent(file.id)}/analyze`,
           jsonRequest("POST", { mimeType: file.mimeType })
         );
         submittedText += `\n\n[Text extracted from ${file.fileName}${analysis.truncated ? " (truncated)" : ""}]\n${analysis.text.slice(0, 30000)}`;
       }
-      if (mode === "research") {
+      const hasImages = files.some(file => file.mimeType.startsWith("image/"));
+      if (mode === "research" && !hasImages) {
         const result = await request<{ answer: string; sources: Source[]; conversationId?: string }>("/api/chat/search", jsonRequest("POST", { message: submittedText, conversationId }));
         setActiveId(result.conversationId || conversationId);
         setMessages(previous => previous.map(message => message.id === assistantId
           ? { ...message, content: result.answer, sources: result.sources, streaming: false }
           : message));
       } else {
+        if (mode === "research" && hasImages) setNotice("Attached images use Vision mode. Web search is not included in this response.");
         const response = await fetch("/api/chat", {
           method: "POST",
           credentials: "include",
@@ -582,7 +831,8 @@ function App() {
             conversationId,
             message: submittedText,
             mode,
-            history: [...messages, userMessage].map(message => ({ role: message.role, content: message.content }))
+            attachments: files.map(file => ({ id: file.id, mimeType: file.mimeType, fileName: file.fileName })),
+            history: messages.map(message => ({ role: message.role, content: message.content }))
           })
         });
         if (!response.ok) {
@@ -641,11 +891,15 @@ function App() {
       }
     } catch (error) {
       const aborted = error instanceof DOMException && error.name === "AbortError";
+      if (files.length) setUploadedFiles(files);
+      if (!aborted && text) setPrompt(text);
       setMessages(previous => previous.map(message => message.id === assistantId
         ? { ...message, content: aborted ? (message.content || "Response stopped.") : `Unable to complete the request: ${errorText(error)}`, streaming: false }
         : message));
     } finally {
+      window.clearTimeout(requestTimeout);
       setStreaming(false);
+      streamingRef.current = false;
       abortRef.current = null;
       textareaRef.current?.focus();
     }
@@ -653,8 +907,10 @@ function App() {
 
   async function submitAuth(event: FormEvent) {
     event.preventDefault();
+    if (registering && authPassword !== authPasswordConfirmation) { setAuthError("The passwords do not match."); return; }
     setAuthBusy(true);
     setAuthError("");
+    setAuthMessage("");
     try {
       const path = registering ? "/api/auth/register" : "/api/auth/login";
       const result = await request<{ user: User }>(path, jsonRequest("POST", {
@@ -669,22 +925,83 @@ function App() {
       setAuthName("");
       setAuthEmail("");
       setAuthPassword("");
+      setAuthPasswordConfirmation("");
+      setConnectionStatus("connected");
+    } catch (error) { setAuthError(errorText(error)); }
+    finally { setAuthBusy(false); }
+  }
+
+  function openAccountAuth(createAccount = false) {
+    setAuthStage("account");
+    setRegistering(createAccount);
+    setAuthError("");
+    setAuthMessage("");
+    setAuthPassword("");
+    setAuthPasswordConfirmation("");
+    setShowAuthPassword(false);
+    setAuthOpen(true);
+  }
+
+  function closeAuthDialog() {
+    setAuthOpen(false);
+    setAuthPassword("");
+    setAuthPasswordConfirmation("");
+    setShowAuthPassword(false);
+  }
+
+  async function submitPasswordRecovery(event: FormEvent) {
+    event.preventDefault();
+    setAuthBusy(true);
+    setAuthError("");
+    setAuthMessage("");
+    try {
+      const result = await request<{ message: string }>("/api/auth/forgot-password", jsonRequest("POST", { email: authEmail }));
+      setAuthMessage(result.message);
+    } catch (error) { setAuthError(errorText(error)); }
+    finally { setAuthBusy(false); }
+  }
+
+  async function submitPasswordReset(event: FormEvent) {
+    event.preventDefault();
+    if (authPassword !== authPasswordConfirmation) { setAuthError("The new passwords do not match."); return; }
+    setAuthBusy(true);
+    setAuthError("");
+    setAuthMessage("");
+    try {
+      const result = await request<{ message: string }>("/api/auth/reset-password", jsonRequest("POST", { token: resetToken, password: authPassword }));
+      setAuthMessage(result.message);
+      setAuthStage("account");
+      setRegistering(false);
+      setResetToken("");
+      setAuthPassword("");
+      setAuthPasswordConfirmation("");
+      window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash}`);
     } catch (error) { setAuthError(errorText(error)); }
     finally { setAuthBusy(false); }
   }
 
   async function signOut() {
-    try { await request("/api/auth/logout", { method: "POST" }); }
-    catch (error) { setNotice(errorText(error)); return; }
+    if (!user || !window.confirm(`Log out of KOPLI AI as ${user.email}?`)) return;
+    let cookieCleared = false;
+    try { await request("/api/auth/logout", { method: "POST" }); cookieCleared = true; }
+    catch (error) {
+      const message = errorText(error);
+      cookieCleared = message.includes("session cookie was cleared");
+      setNotice(cookieCleared
+        ? `Your browser session ended, but server invalidation could not be verified: ${message}`
+        : `KOPLI AI could not complete logout. Your session is still active; retry when the server is reachable. ${message}`);
+      if (!cookieCleared) return;
+    }
     setUser(null);
     setConversations([]);
     setActiveId(null);
     setMessages([]);
     setSection("Chat");
+    setProfileMenuOpen(false);
   }
 
   async function updatePreferences(update: Partial<Preference>) {
-    if (!user) { setAuthOpen(true); return; }
+    if (!user) { openAccountAuth(); return; }
     const previous = preferences;
     setPreferences(current => ({ ...current, ...update }));
     try { setPreferences(await request<Preference>("/api/memory/preferences", jsonRequest("PATCH", update))); }
@@ -692,7 +1009,7 @@ function App() {
   }
 
   async function openMemoryManager() {
-    if (!user) { setAuthOpen(true); setNotice("Sign in to manage saved memory."); return; }
+    if (!user) { openAccountAuth(); setNotice("Sign in to manage saved memory."); return; }
     setMemoryOpen(true);
     setMemoryResults([]);
     try {
@@ -741,7 +1058,7 @@ function App() {
   }
 
   async function exportData() {
-    if (!user) { setAuthOpen(true); return; }
+    if (!user) { openAccountAuth(); return; }
     try {
       const value = await request<unknown>("/api/memory/export");
       const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: "application/json" }));
@@ -941,7 +1258,7 @@ function App() {
             </div>
           )) : <div className="empty-history">{authReady ? "Your conversations will appear here." : "Loading history…"}</div>}
         </div>
-        <button className="profile" onClick={() => user ? chooseSection("Settings") : setAuthOpen(true)}>
+        <button className="profile" onClick={() => user ? chooseSection("Settings") : openAccountAuth()}>
           <span className="avatar">{user ? (user.name || user.email).slice(0, 2).toUpperCase() : <UserRound size={16} />}</span>
           <span><strong>{user?.name || "Guest"}</strong><span>{user?.email || "Sign in to sync memory"}</span></span>
           {user ? <Settings size={16} /> : <LogIn size={16} />}
@@ -957,8 +1274,13 @@ function App() {
             <button className="icon-button notification-button" aria-label="Notifications" title="Notifications" onClick={() => setNotice("You are all caught up.")}><Bell size={17} /><span /></button>
             <button className="icon-button" aria-label={dark ? "Use light theme" : "Use dark theme"} title="Toggle theme" onClick={() => setDark(value => !value)}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
             <button className="icon-button" aria-label="Help and support" title="Help and support" onClick={() => chooseSection("Settings")}><CircleHelp size={17} /></button>
-            <div className="profile-menu-wrap"><button className="header-avatar" aria-label="Open profile menu" aria-expanded={profileMenuOpen} onClick={() => setProfileMenuOpen(value => !value)}>{user ? (user.name || user.email).slice(0,2).toUpperCase() : <UserRound size={17} />}</button>
-              {profileMenuOpen && <div className="profile-dropdown"><button onClick={() => user ? chooseSection("Settings") : setAuthOpen(true)}><UserRound size={16}/><span>{user ? "Account settings" : "Sign in"}</span></button><button onClick={() => chooseSection("Settings")}><Settings size={16}/><span>Preferences</span></button></div>}</div>
+            <div className="profile-menu-wrap"><button className="header-avatar" aria-label={user ? `Account menu for ${user.email}` : "Open sign in menu"} aria-expanded={profileMenuOpen} onClick={() => setProfileMenuOpen(value => !value)}>{user ? (user.name || user.email).slice(0,2).toUpperCase() : <UserRound size={17} />}</button>
+              {profileMenuOpen && <div className="profile-dropdown">
+                {user && <div className="profile-dropdown-account"><span className="avatar"><UserRound size={16} /></span><span><strong>KOPLI AI ACCOUNT</strong><span>{user.email}</span></span></div>}
+                <button onClick={() => { user ? chooseSection("Settings") : openAccountAuth(); setProfileMenuOpen(false); }}><UserRound size={16}/><span>{user ? "Account settings" : "Sign in"}</span></button>
+                <button onClick={() => { chooseSection("Settings"); setProfileMenuOpen(false); }}><Settings size={16}/><span>Preferences</span></button>
+                {user && <button className="profile-logout" onClick={() => void signOut()}><LogOut size={16}/><span>Log out</span></button>}
+              </div>}</div>
           </div>
         </header>
 
@@ -981,9 +1303,15 @@ function App() {
             {showScrollToLatest && messages.length > 0 && <button className="scroll-to-latest" type="button" onClick={scrollToLatest} aria-label="Scroll to latest message">
               <ChevronDown size={16} aria-hidden="true" /><span>Latest Message</span><i aria-label="New messages" />
             </button>}
-            <div className="composer-wrap">
-              {uploadedFiles.length > 0 && <div className="attachments" aria-label="Attached files">
-                {uploadedFiles.map(file => <div key={file.id}><FileText size={14} /><span title={file.fileName}>{file.fileName}</span><button aria-label={`Remove ${file.fileName}`} onClick={() => setUploadedFiles(previous => previous.filter(item => item.id !== file.id))}><X size={14} /></button></div>)}
+                    <div className="composer-wrap">
+              {(connectionStatus === "offline" || connectionStatus === "degraded") && <div className="connection-banner" role="status"><span>{connectionStatus === "offline" ? "KOPLI AI is not responding right now." : "Account storage is unavailable. Guest chat is still available."}</span><button type="button" onClick={() => void checkServerConnection()}>Retry</button></div>}
+              {(uploadedFiles.length > 0 || uploadBusy) && <div className="attachments" aria-label="Attached files">
+                {uploadedFiles.map(file => <div className="attachment-preview" key={file.id}>
+                  {file.previewUrl ? <img src={file.previewUrl} alt="" /> : <FileText size={20} />}
+                  <span className="attachment-details"><strong title={file.fileName}>{file.fileName}</strong><small>{file.mimeType.split("/").pop()?.toUpperCase()} · {(file.size / 1024).toFixed(0)} KB</small></span>
+                  <button type="button" aria-label={`Remove ${file.fileName}`} onClick={() => removeUploadedFile(file)}><X size={15} /></button>
+                </div>)}
+                {uploadBusy && <div className="attachment-progress" role="status"><span>Uploading attachments</span><progress max={100} value={uploadProgress} /><small>{uploadProgress}%</small></div>}
               </div>}
               <form className="composer" onSubmit={event => void sendMessage(event)}>
                 <textarea ref={textareaRef} className="composer-input" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -991,8 +1319,19 @@ function App() {
                 }} placeholder="Work with KOPLI AI" aria-label="Message KOPLI AI" rows={2} disabled={streaming} />
                 <div className="composer-toolbar">
                   <div className="composer-toolbar-left">
-                    <input ref={fileInputRef} type="file" multiple hidden onChange={event => void uploadFiles(event)} aria-label="Choose files" />
-                    <button className="composer-button attach-button" type="button" aria-label="Attach files" title="Attach files" onClick={() => fileInputRef.current?.click()}><Plus size={21} /></button>
+                    <div className="attachment-menu-wrap" ref={attachmentMenuRef}>
+                      <input ref={fileInputRef} type="file" multiple hidden accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.json,.zip,.rtf,.md,.png,.jpg,.jpeg,.webp,.gif,application/pdf,application/zip" onChange={uploadFiles} aria-label="Choose files" />
+                      <input ref={photoInputRef} type="file" multiple hidden accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" onChange={uploadFiles} aria-label="Choose photos" />
+                      <input ref={cameraFallbackInputRef} type="file" hidden accept="image/*" capture="environment" onChange={uploadFiles} aria-label="Take a photo with device camera" />
+                      <button className="composer-button attach-button" type="button" aria-label="Add attachment" title="Add attachment" aria-expanded={attachmentMenuOpen} onClick={() => setAttachmentMenuOpen(value => !value)}><Plus size={21} /></button>
+                      {attachmentMenuOpen && <div className="attachment-menu" role="menu" aria-label="Add to chat">
+                        <button type="button" role="menuitem" onClick={() => { setAttachmentMenuOpen(false); setCameraError(""); setCapturedPhoto(null); setCameraOpen(true); }}><Camera size={18} /><span><strong>Camera</strong><small>Capture a photo</small></span></button>
+                        <button type="button" role="menuitem" onClick={() => { setAttachmentMenuOpen(false); photoInputRef.current?.click(); }}><Images size={18} /><span><strong>Photos</strong><small>Choose images</small></span></button>
+                        <button type="button" role="menuitem" onClick={() => { setAttachmentMenuOpen(false); fileInputRef.current?.click(); }}><Files size={18} /><span><strong>Files</strong><small>Documents and archives</small></span></button>
+                        <div className="attachment-menu-unavailable" aria-disabled="true"><Code2 size={18} /><span><strong>Plugins</strong><small>No plugin integrations are configured</small></span></div>
+                        <button type="button" role="menuitem" aria-pressed={mode === "reasoning"} onClick={() => { setMode("reasoning"); setAttachmentMenuOpen(false); }}><Brain size={18} /><span><strong>Think Harder</strong><small>Use deeper reasoning</small></span></button>
+                      </div>}
+                    </div>
                     <button className={`composer-button${mode === "research" ? " search-on" : ""}`} type="button" aria-label="Toggle research mode" title="Research mode" onClick={() => setMode(value => value === "research" ? "smart" : "research")}><Globe2 size={18} /></button>
                   </div>
                   <div className="composer-toolbar-right">
@@ -1006,7 +1345,7 @@ function App() {
                     <button className={`composer-button${voiceActive ? " selected" : ""}`} type="button" aria-label={voiceActive ? "Stop voice input" : "Start voice input"} title="Voice input" onClick={toggleVoice}><Mic size={18} /></button>
                     {streaming
                       ? <button className="send-button" type="button" aria-label="Stop response" onClick={() => abortRef.current?.abort()}><X size={18} /></button>
-                      : <button className="send-button" type="submit" disabled={!prompt.trim() && !uploadedFiles.length} aria-label="Send message"><Send size={18} /></button>}
+                      : <button className="send-button" type="submit" disabled={uploadBusy || (!prompt.trim() && !uploadedFiles.length)} aria-label="Send message"><Send size={18} /></button>}
                   </div>
                 </div>
               </form>
@@ -1039,7 +1378,7 @@ function App() {
             </button>)}
           </div>
           <div className="settings-card modern explore-workspace" aria-label={`${toolType} tool`}>
-            {!user && <div className="explore-provider-note"><strong>Sign in to create and download files</strong><span>Generated files are private to your account.</span><button type="button" onClick={() => setAuthOpen(true)}>Sign in</button></div>}
+            {!user && <div className="explore-provider-note"><strong>Sign in to create and download files</strong><span>Generated files are private to your account.</span><button type="button" onClick={() => openAccountAuth()}>Sign in</button></div>}
             {user && toolProviders && ((toolType === "image" && !toolProviders.stability) || (toolType !== "image" && !toolProviders.groq)) && <div className="explore-provider-note" role="status">
               <strong>{toolType === "image" ? "Image generation needs provider setup" : "AI file generation needs provider setup"}</strong>
               <span>{toolType === "image" ? "Configure STABILITY_API_KEY in the existing service to enable image generation." : "Configure GROQ_API_KEY in the existing service to enable document generation."}</span>
@@ -1090,7 +1429,7 @@ function App() {
               <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("Appearance")}><Sun size={18} /><span>Appearance</span><ChevronRight size={17} /></button>
               <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("Data & memory")}><Brain size={18} /><span>Data &amp; memory</span><ChevronRight size={17} /></button>
               <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("About KOPLI AI")}><CircleHelp size={18} /><span>About KOPLI AI</span><ChevronRight size={17} /></button>
-              <button className="settings-neutral-row-button" onClick={() => user ? void signOut() : setAuthOpen(true)}>{user ? <LogOut size={18} /> : <LogIn size={18} />}<span>{user ? "Sign out" : "Sign in or create account"}</span><ChevronRight size={17} /></button>
+              <button className="settings-neutral-row-button" onClick={() => user ? void signOut() : openAccountAuth()}>{user ? <LogOut size={18} /> : <LogIn size={18} />}<span>{user ? "Sign out" : "Sign in or create account"}</span><ChevronRight size={17} /></button>
               {user?.role === "owner" && <button className="settings-neutral-row-button" onClick={() => void loadAdmin()}><Shield size={18} /><span>Admin status</span><ChevronRight size={17} /></button>}
             </div>
           </div> : <div className="settings-detail">
@@ -1107,7 +1446,7 @@ function App() {
               <div className="settings-neutral-row"><div><strong>Saved memory</strong><span>Review or remove saved preferences and summaries</span></div><button className="settings-action" onClick={() => void openMemoryManager()}>Manage</button></div>
               <div className="settings-neutral-row"><div><strong>Export my data</strong><span>Download memory, preferences, and conversations</span></div><button className="settings-action" onClick={() => void exportData()} disabled={!user}>Export</button></div>
             </div>}
-            {settingsDetail === "Account" && <div className="settings-card-neutral"><div className="settings-neutral-row"><div><strong>{user?.email || "Guest session"}</strong><span>{user ? "Your account is signed in" : "Sign in to sync your history"}</span></div><button className="settings-action" onClick={() => user ? void signOut() : setAuthOpen(true)}>{user ? "Sign out" : "Sign in"}</button></div></div>}
+            {settingsDetail === "Account" && <div className="settings-card-neutral"><div className="settings-neutral-row"><div><strong>{user?.email || "Guest session"}</strong><span>{user ? "Your account is signed in" : "Sign in to sync your history"}</span></div><button className="settings-action" onClick={() => user ? void signOut() : openAccountAuth()}>{user ? "Sign out" : "Sign in"}</button></div></div>}
             {settingsDetail === "About KOPLI AI" && <div className="settings-card-neutral about-brand"><span className="brand-mark"><img src="/logo.png" alt="KOPLI AI" /></span><div><strong>KOPLI AI</strong><span>Your personal AI workspace</span></div></div>}
           </div>}
           <div className="settings-search-wrap"><Search size={17} /><input value={settingsSearch} onChange={event => setSettingsSearch(event.target.value)} placeholder="Search settings" aria-label="Search settings" />
@@ -1131,20 +1470,58 @@ function App() {
 
       {notice && <div className="feedback-toast" role="status">{notice}</div>}
 
-      {authOpen && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setAuthOpen(false); }}>
+      {authOpen && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeAuthDialog(); }}>
         <section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
-          <button className="dialog-close" aria-label="Close sign in" onClick={() => setAuthOpen(false)}><X size={19} /></button>
-          <div className="auth-brand">KOPLI <span>AI</span></div><h1 id="auth-title">{registering ? "Create your account" : "Welcome back"}</h1>
-          <p>Sign in to sync conversations and manage private memory.</p>
-          <form onSubmit={event => void submitAuth(event)}>
+          <button className="dialog-close" aria-label="Close sign in" onClick={closeAuthDialog}><X size={19} /></button>
+          <div className="auth-brand">KOPLI <span>AI</span></div>
+          <h1 id="auth-title">{authStage === "forgot" ? "Reset your password" : authStage === "reset" ? "Create new password" : registering ? "Create your account" : "Welcome back"}</h1>
+          <p>{authStage === "forgot" ? "Enter the email for your KOPLI AI account." : authStage === "reset" ? "Choose a new password for your account." : registering ? "Create an account to sync conversations and files." : "Sign in to your KOPLI AI account."}</p>
+          {authStage === "account" && <form onSubmit={event => void submitAuth(event)}>
             {registering && <label>Name<input autoComplete="name" value={authName} onChange={event => setAuthName(event.target.value)} required maxLength={100} /></label>}
             <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
-            <label>Password<input type="password" autoComplete={registering ? "new-password" : "current-password"} value={authPassword} onChange={event => setAuthPassword(event.target.value)} required minLength={registering ? 12 : 1} /></label>
+            <label>Password<span className="auth-password-field"><input type={showAuthPassword ? "text" : "password"} autoComplete={registering ? "new-password" : "current-password"} value={authPassword} onChange={event => setAuthPassword(event.target.value)} required minLength={registering ? 12 : 1} /><button type="button" aria-label={showAuthPassword ? "Hide password" : "Show password"} aria-pressed={showAuthPassword} onClick={() => setShowAuthPassword(value => !value)}>{showAuthPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>
+            {registering && <label>Confirm password<input type={showAuthPassword ? "text" : "password"} autoComplete="new-password" value={authPasswordConfirmation} onChange={event => setAuthPasswordConfirmation(event.target.value)} required minLength={12} /></label>}
             {authError && <p className="auth-error" role="alert">{authError}</p>}
+            {authMessage && <p className="auth-success" role="status">{authMessage}</p>}
             <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Please wait…" : registering ? "Create account" : "Sign in"}</button>
-          </form>
-          <button className="auth-mode-toggle" onClick={() => { setRegistering(value => !value); setAuthError(""); }}>{registering ? "Already have an account? Sign in" : "New to KOPLI AI? Create an account"}</button>
-          <p className="oauth-note">Email and password sign-in are available. Google and GitHub sign-in are not configured.</p>
+          </form>}
+          {authStage === "forgot" && <form onSubmit={event => void submitPasswordRecovery(event)}>
+            <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
+            {authError && <p className="auth-error" role="alert">{authError}</p>}
+            {authMessage && <p className="auth-success" role="status">{authMessage}</p>}
+            <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Sending…" : "Send recovery email"}</button>
+            <button className="auth-mode-toggle" type="button" onClick={() => { setAuthStage("account"); setAuthError(""); setAuthMessage(""); }}>Back to sign in</button>
+          </form>}
+          {authStage === "reset" && <form onSubmit={event => void submitPasswordReset(event)}>
+            {!resetToken && <p className="auth-error" role="alert">This reset link is missing or invalid. Request a new recovery email.</p>}
+            <label>New password<span className="auth-password-field"><input type={showAuthPassword ? "text" : "password"} autoComplete="new-password" value={authPassword} onChange={event => setAuthPassword(event.target.value)} required minLength={12} /><button type="button" aria-label={showAuthPassword ? "Hide password" : "Show password"} aria-pressed={showAuthPassword} onClick={() => setShowAuthPassword(value => !value)}>{showAuthPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>
+            <label>Confirm new password<input type={showAuthPassword ? "text" : "password"} autoComplete="new-password" value={authPasswordConfirmation} onChange={event => setAuthPasswordConfirmation(event.target.value)} required minLength={12} /></label>
+            {authError && <p className="auth-error" role="alert">{authError}</p>}
+            {authMessage && <p className="auth-success" role="status">{authMessage}</p>}
+            <button className="auth-submit" type="submit" disabled={authBusy || !resetToken}>{authBusy ? "Saving…" : "Save new password"}</button>
+            {!resetToken && <button className="auth-mode-toggle" type="button" onClick={() => { setAuthStage("forgot"); setAuthError(""); }}>Request a new reset link</button>}
+          </form>}
+          {authStage === "account" && <div className="auth-links">
+            {!registering && <button className="auth-mode-toggle" type="button" onClick={() => { setAuthStage("forgot"); setAuthError(""); setAuthMessage(""); setAuthPassword(""); setAuthPasswordConfirmation(""); setShowAuthPassword(false); }}>Forgot password?</button>}
+            <button className="auth-mode-toggle" type="button" onClick={() => { setRegistering(value => !value); setAuthError(""); setAuthMessage(""); setAuthPassword(""); setAuthPasswordConfirmation(""); }}>{registering ? "Already have an account? Sign in" : "New to KOPLI AI? Create an account"}</button>
+          </div>}
+        </section>
+      </div>}
+
+      {cameraOpen && <div className="dialog-backdrop camera-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeCamera(); }}>
+        <section className="camera-dialog" role="dialog" aria-modal="true" aria-labelledby="camera-title">
+          <button className="dialog-close" aria-label="Close camera" onClick={closeCamera}><X size={19} /></button>
+          <h2 id="camera-title">Take a photo</h2>
+          {capturedPhotoUrl
+            ? <img className="camera-preview" src={capturedPhotoUrl} alt="Captured photo preview" />
+            : <video ref={cameraVideoRef} className="camera-preview" autoPlay muted playsInline aria-label="Camera preview" />}
+          {cameraError && <p className="camera-error" role="alert">{cameraError}</p>}
+          <div className="camera-actions">
+            {capturedPhoto
+              ? <><button type="button" className="camera-secondary" onClick={() => { if (capturedPhotoUrl) { URL.revokeObjectURL(capturedPhotoUrl); objectUrlsRef.current.delete(capturedPhotoUrl); } setCapturedPhotoUrl(""); setCapturedPhoto(null); setCameraError(""); }} disabled={uploadBusy}>Retake</button><button type="button" className="auth-submit" onClick={() => void useCameraPhoto()} disabled={uploadBusy}>{uploadBusy ? `Uploading ${uploadProgress}%…` : "Use photo"}</button></>
+              : <><button type="button" className="camera-secondary" onClick={closeCamera}>Cancel</button><button type="button" className="auth-submit" onClick={captureCameraPhoto}><Camera size={17} /> Capture photo</button></>}
+          </div>
+          {cameraError && <button type="button" className="camera-fallback" onClick={() => { cameraFallbackInputRef.current?.click(); closeCamera(); }}>Open device camera picker</button>}
         </section>
       </div>}
 
