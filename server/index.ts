@@ -15,6 +15,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { inflateRawSync } from "node:zlib";
 import Groq from "groq-sdk";
+import { GeminiProviderError, isTransientProviderError, streamGeminiResponse } from "./gemini-provider.js";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, Header, Footer } from "docx";
 import PDFDocument from "pdfkit";
 import PptxGenJS from "pptxgenjs";
@@ -658,10 +659,11 @@ app.get("/api/status", async (_req, res) => {
   }
   res.json({
     groq: configured(process.env.GROQ_API_KEY),
+    gemini: configured(process.env.GEMINI_API_KEY),
     tavily: configured(process.env.TAVILY_API_KEY),
     stability: configured(process.env.STABILITY_API_KEY),
     database,
-    demo: !configured(process.env.GROQ_API_KEY),
+    demo: !configured(process.env.GROQ_API_KEY) && !configured(process.env.GEMINI_API_KEY),
     model: aiConfig.groqModel
   });
 });
@@ -883,6 +885,7 @@ app.get("/api/admin/status", async (req, res) => {
   if (!sessionUser || sessionUser.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
   res.json({ authorized: true, providerStatus: {
     groq: configured(process.env.GROQ_API_KEY),
+    gemini: configured(process.env.GEMINI_API_KEY),
     tavily: configured(process.env.TAVILY_API_KEY),
     stability: configured(process.env.STABILITY_API_KEY),
     database: Boolean(prisma)
@@ -931,7 +934,10 @@ app.post("/api/chat", async (req, res) => {
     if (totalImageBytes > 15 * 1024 * 1024) return res.status(413).json({ error: "Keep attached images under 15 MB combined for reliable AI analysis." });
     imageInputs.push({ mimeType, dataUrl: `data:${mimeType};base64,${bytes.toString("base64")}` });
   }
-  if (imageInputs.length && !groq) return res.status(503).json({ error: "Image analysis is unavailable because the Groq AI provider is not configured." });
+  const geminiConfigured = configured(process.env.GEMINI_API_KEY);
+  if (imageInputs.length && !groq && !geminiConfigured) {
+    return res.status(503).json({ error: "Image analysis is unavailable because neither Gemini nor Groq is configured on the server." });
+  }
   const id = conversationId || crypto.randomUUID();
   let safeHistory = Array.isArray(history)
     ? history.filter(item =>
@@ -1002,13 +1008,17 @@ app.post("/api/chat", async (req, res) => {
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
   let clientDisconnected = false;
+  const providerAbort = new AbortController();
   res.on("close", () => {
-    if (!res.writableEnded) clientDisconnected = true;
+    if (!res.writableEnded) {
+      clientDisconnected = true;
+      providerAbort.abort();
+    }
   });
   res.write(`data: ${JSON.stringify({ conversationId: id })}\n\n`);
 
   let assistantFull = "";
-  if (!groq) {
+  if (!groq && !geminiConfigured) {
     const text = demoReply(message);
     assistantFull = text;
     for (const word of text.split(/(\s+)/)) {
@@ -1020,6 +1030,8 @@ app.post("/api/chat", async (req, res) => {
         ? "You are KOPLI AI, created and owned by Pranesh KK. Analyze the attached images carefully and answer the user's question. Be clear about visual uncertainty and do not claim to see details that are not visible."
         : mode === "coding"
         ? "You are KOPLI AI, created and owned by Pranesh KK. Be precise and helpful for programming tasks."
+        : mode === "study"
+          ? "You are KOPLI AI, created and owned by Pranesh KK. Act as a patient study tutor. Explain ideas step by step at the learner's level, use clear examples, and check understanding. When asked, create practice questions, quizzes, flashcards, revision notes, or exam preparation material. Explain answers and be honest about uncertainty."
         : mode === "reasoning"
           ? "You are KOPLI AI, created and owned by Pranesh KK. Reason carefully and explain complex topics step by step."
           : mode === "vision"
@@ -1078,26 +1090,74 @@ app.post("/api/chat", async (req, res) => {
         ...safeHistory,
         { role: "user" as const, content: userContent }
       ];
-      const stream = await groq.chat.completions.create({
-        model: imageInputs.length ? aiConfig.groqVisionModel : aiConfig.groqModel,
-        messages,
-        temperature: mode === "coding" ? 0.2 : mode === "reasoning" ? 0.4 : 0.7,
-        ...(mode === "fast" ? { max_tokens: 800 } : {}),
-        stream: true
-      });
-      let full = "";
-      for await (const chunk of stream) {
-        if (clientDisconnected || res.destroyed) break;
-        const text = chunk.choices[0]?.delta?.content || "";
-        if (text) {
-          full += text;
-          if (!res.destroyed) res.write(`data: ${JSON.stringify({ text })}\n\n`);
+      const emitText = (text: string) => {
+        assistantFull += text;
+        if (!res.destroyed) res.write(`data: ${JSON.stringify({ text })}\n\n`);
+      };
+      const runGemini = async () => {
+        let streamed = "";
+        for await (const text of streamGeminiResponse({
+          apiKey: process.env.GEMINI_API_KEY || "",
+          model: process.env.GEMINI_MODEL,
+          systemInstruction: system + memoryContext,
+          history: safeHistory,
+          prompt: message,
+          images: imageInputs,
+          temperature: mode === "coding" ? 0.2 : mode === "reasoning" ? 0.4 : 0.7,
+          maxOutputTokens: mode === "fast" ? 800 : 2048,
+          signal: providerAbort.signal
+        })) {
+          if (clientDisconnected || res.destroyed) break;
+          streamed += text;
+          emitText(text);
         }
+        if (!streamed && !clientDisconnected) throw new GeminiProviderError(502, "Gemini returned no text for this request.");
+        if (streamed) conversation.messages.push({ role: "assistant", content: streamed });
+      };
+      const runGroq = async () => {
+        if (!groq) throw new Error("Groq is not configured.");
+        const stream = await groq.chat.completions.create({
+          model: imageInputs.length ? aiConfig.groqVisionModel : aiConfig.groqModel,
+          messages,
+          temperature: mode === "coding" ? 0.2 : mode === "reasoning" ? 0.4 : 0.7,
+          ...(mode === "fast" ? { max_tokens: 800 } : {}),
+          stream: true
+        });
+        let streamed = "";
+        for await (const chunk of stream) {
+          if (clientDisconnected || res.destroyed) break;
+          const text = chunk.choices[0]?.delta?.content || "";
+          if (text) {
+            streamed += text;
+            emitText(text);
+          }
+        }
+        if (streamed) conversation.messages.push({ role: "assistant", content: streamed });
+      };
+      if (imageInputs.length && geminiConfigured) {
+        const responseStart = assistantFull.length;
+        try {
+          await runGemini();
+        } catch (error) {
+          if (!groq || clientDisconnected || assistantFull.length !== responseStart) throw error;
+          await runGroq();
+        }
+      } else if (groq) {
+        const responseStart = assistantFull.length;
+        try {
+          await runGroq();
+        } catch (error) {
+          if (!geminiConfigured || !isTransientProviderError(error) || clientDisconnected || assistantFull.length !== responseStart) throw error;
+          await runGemini();
+        }
+      } else {
+        await runGemini();
       }
-      assistantFull = full;
-      conversation.messages.push({ role: "assistant", content: full });
     } catch (error: any) {
-      if (!res.destroyed) res.write(`data: ${JSON.stringify({ error: error?.message || "Groq request failed." })}\n\n`);
+      if (!res.destroyed && !clientDisconnected) {
+        const message = error instanceof GeminiProviderError ? error.message : error?.message || "AI provider request failed.";
+        res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
+      }
     }
   }
   if (prisma && authenticatedUser && assistantFull) {

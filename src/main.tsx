@@ -13,7 +13,7 @@ import "./styles.css";
 import "./theme.css";
 import "./chat-theme.css";
 
-type Mode = "fast" | "smart" | "reasoning" | "coding" | "research" | "vision";
+type Mode = "fast" | "smart" | "reasoning" | "coding" | "research" | "vision" | "study";
 type Section = "Chat" | "Search" | "Explore" | "Library" | "Settings" | "Admin";
 type Rating = "helpful" | "not_helpful";
 type IconComponent = typeof Sparkles;
@@ -223,7 +223,8 @@ const modes: Array<{ id: Mode; label: string; detail: string; icon: IconComponen
   { id: "reasoning", label: "Reasoning", detail: "Complex analysis", icon: Brain },
   { id: "coding", label: "Coding", detail: "Programming assistant", icon: Code2 },
   { id: "research", label: "Research", detail: "Real web sources", icon: Globe2 },
-  { id: "vision", label: "Vision", detail: "Image-aware workflow", icon: Eye }
+  { id: "vision", label: "Vision", detail: "Image-aware workflow", icon: Eye },
+  { id: "study", label: "Study", detail: "Learn step by step", icon: Brain }
 ];
 
 const navigation: Array<{ label: Section; icon: IconComponent }> = [
