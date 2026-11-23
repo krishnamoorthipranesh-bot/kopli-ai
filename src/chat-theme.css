@@ -553,6 +553,7 @@
 .auth-password-field button { position:absolute;right:5px;top:50%;display:grid;place-items:center;width:34px;height:34px;transform:translateY(-50%);border:0;border-radius:9px;background:transparent;color:var(--text-secondary);cursor:pointer; }
 .auth-password-field button:hover { background:rgba(116,140,180,.12); }
 .auth-links { display:grid;gap:4px;margin-top:12px; }
+.auth-verification { display:grid;gap:14px; }
 .auth-success { margin:0;color:#23754d;font-size:13px;line-height:1.45; }
 .dark .auth-success { color:#6fd09c; }
 .camera-backdrop { z-index:60; }

@@ -90,6 +90,7 @@ interface UploadedFile {
 
 interface ApiErrorBody {
   error?: string;
+  code?: string;
 }
 
 interface SpeechResultLike {
@@ -112,7 +113,7 @@ interface SpeechWindow extends Window {
 }
 
 class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly code?: string) {
     super(message);
     this.name = "ApiError";
   }
@@ -142,7 +143,7 @@ async function request<T>(url: string, init: RequestInit = {}, timeoutMs = 30000
     const message = body && typeof body === "object" && "error" in body
       ? String((body as ApiErrorBody).error || `Request failed (${response.status}).`)
       : `Request failed (${response.status}).`;
-    throw new ApiError(message, response.status);
+    throw new ApiError(message, response.status, body && typeof body === "object" && "code" in body ? String((body as ApiErrorBody).code || "") : undefined);
   }
   return body as T;
 }
@@ -278,7 +279,7 @@ function App() {
   const [authReady, setAuthReady] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [registering, setRegistering] = useState(false);
-  const [authStage, setAuthStage] = useState<"account" | "forgot" | "reset">("account");
+  const [authStage, setAuthStage] = useState<"account" | "forgot" | "reset" | "verify">("account");
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
@@ -402,9 +403,7 @@ function App() {
         if (!isActive()) return;
       }
       if (health.persistence !== "ready") {
-        const detail = health.persistence === "not_configured" ? "Account storage is not configured." : "Account storage could not be reached.";
         setConnectionStatus("degraded");
-        setNotice(`${detail} Guest chat is available. Retry after the database connection is restored.`);
         return;
       }
       try {
@@ -413,13 +412,11 @@ function App() {
       } catch (error) {
         if (isActive() && (!(error instanceof ApiError) || error.status !== 401)) {
           setConnectionStatus("degraded");
-          setNotice("The server is online, but your account session could not be restored. Retry to check again.");
         }
       }
     } catch (error) {
       if (isActive()) {
         setConnectionStatus("offline");
-        setNotice(`KOPLI AI could not reach the server: ${errorText(error)}`);
       }
     } finally {
       if (isActive()) setAuthReady(true);
@@ -434,14 +431,29 @@ function App() {
   }, [checkServerConnection]);
 
   useEffect(() => {
-    const token = new URLSearchParams(window.location.search).get("resetToken");
-    if (!token) return;
-    setResetToken(token);
-    setAuthStage("reset");
-    setRegistering(false);
-    setAuthPassword("");
-    setAuthPasswordConfirmation("");
-    setAuthOpen(true);
+    const params = new URLSearchParams(window.location.search);
+    const verificationToken = params.get("verifyToken");
+    if (verificationToken) {
+      setAuthStage("verify");
+      setRegistering(false);
+      setAuthOpen(true);
+      setAuthBusy(true);
+      window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash}`);
+      void request<{ message: string }>("/api/auth/verify-email", jsonRequest("POST", { token: verificationToken }))
+        .then(result => setAuthMessage(result.message))
+        .catch(error => setAuthError(errorText(error)))
+        .finally(() => setAuthBusy(false));
+      return;
+    }
+    const token = params.get("resetToken");
+    if (token) {
+      setResetToken(token);
+      setAuthStage("reset");
+      setRegistering(false);
+      setAuthPassword("");
+      setAuthPasswordConfirmation("");
+      setAuthOpen(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -913,11 +925,20 @@ function App() {
     setAuthMessage("");
     try {
       const path = registering ? "/api/auth/register" : "/api/auth/login";
-      const result = await request<{ user: User }>(path, jsonRequest("POST", {
+      const result = await request<{ user?: User; message?: string }>(path, jsonRequest("POST", {
         ...(registering ? { name: authName } : {}),
         email: authEmail,
         password: authPassword
       }));
+      if (registering) {
+        setAuthEmail(authEmail.trim().toLowerCase());
+        setAuthStage("verify");
+        setAuthMessage(result.message || "Check your inbox for a verification link before signing in.");
+        setAuthPassword("");
+        setAuthPasswordConfirmation("");
+        return;
+      }
+      if (!result.user) throw new Error("The account service returned an incomplete sign-in response.");
       setUser(result.user);
       setActiveId(null);
       setMessages([]);
@@ -927,6 +948,25 @@ function App() {
       setAuthPassword("");
       setAuthPasswordConfirmation("");
       setConnectionStatus("connected");
+    } catch (error) {
+      if (error instanceof ApiError && error.code === "EMAIL_NOT_VERIFIED") {
+        setAuthEmail(authEmail.trim().toLowerCase());
+        setAuthStage("verify");
+        setAuthPassword("");
+        setAuthPasswordConfirmation("");
+        setAuthMessage("Verify your email address before signing in. You can request another verification link below.");
+      } else setAuthError(errorText(error));
+    }
+    finally { setAuthBusy(false); }
+  }
+
+  async function resendVerificationEmail() {
+    setAuthBusy(true);
+    setAuthError("");
+    setAuthMessage("");
+    try {
+      const result = await request<{ message: string }>("/api/auth/resend-verification", jsonRequest("POST", { email: authEmail }));
+      setAuthMessage(result.message);
     } catch (error) { setAuthError(errorText(error)); }
     finally { setAuthBusy(false); }
   }
@@ -1274,13 +1314,13 @@ function App() {
             <button className="icon-button notification-button" aria-label="Notifications" title="Notifications" onClick={() => setNotice("You are all caught up.")}><Bell size={17} /><span /></button>
             <button className="icon-button" aria-label={dark ? "Use light theme" : "Use dark theme"} title="Toggle theme" onClick={() => setDark(value => !value)}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
             <button className="icon-button" aria-label="Help and support" title="Help and support" onClick={() => chooseSection("Settings")}><CircleHelp size={17} /></button>
-            <div className="profile-menu-wrap"><button className="header-avatar" aria-label={user ? `Account menu for ${user.email}` : "Open sign in menu"} aria-expanded={profileMenuOpen} onClick={() => setProfileMenuOpen(value => !value)}>{user ? (user.name || user.email).slice(0,2).toUpperCase() : <UserRound size={17} />}</button>
+            {user && <div className="profile-menu-wrap"><button className="header-avatar" aria-label={`Account menu for ${user.email}`} aria-expanded={profileMenuOpen} onClick={() => setProfileMenuOpen(value => !value)}>{(user.name || user.email).slice(0,2).toUpperCase()}</button>
               {profileMenuOpen && <div className="profile-dropdown">
-                {user && <div className="profile-dropdown-account"><span className="avatar"><UserRound size={16} /></span><span><strong>KOPLI AI ACCOUNT</strong><span>{user.email}</span></span></div>}
-                <button onClick={() => { user ? chooseSection("Settings") : openAccountAuth(); setProfileMenuOpen(false); }}><UserRound size={16}/><span>{user ? "Account settings" : "Sign in"}</span></button>
+                <div className="profile-dropdown-account"><span className="avatar"><UserRound size={16} /></span><span><strong>KOPLI AI ACCOUNT</strong><span>{user.email}</span></span></div>
+                <button onClick={() => { chooseSection("Settings"); setProfileMenuOpen(false); }}><UserRound size={16}/><span>Account settings</span></button>
                 <button onClick={() => { chooseSection("Settings"); setProfileMenuOpen(false); }}><Settings size={16}/><span>Preferences</span></button>
-                {user && <button className="profile-logout" onClick={() => void signOut()}><LogOut size={16}/><span>Log out</span></button>}
-              </div>}</div>
+                <button className="profile-logout" onClick={() => void signOut()}><LogOut size={16}/><span>Log out</span></button>
+              </div>}</div>}
           </div>
         </header>
 
@@ -1304,7 +1344,6 @@ function App() {
               <ChevronDown size={16} aria-hidden="true" /><span>Latest Message</span><i aria-label="New messages" />
             </button>}
                     <div className="composer-wrap">
-              {(connectionStatus === "offline" || connectionStatus === "degraded") && <div className="connection-banner" role="status"><span>{connectionStatus === "offline" ? "KOPLI AI is not responding right now." : "Account storage is unavailable. Guest chat is still available."}</span><button type="button" onClick={() => void checkServerConnection()}>Retry</button></div>}
               {(uploadedFiles.length > 0 || uploadBusy) && <div className="attachments" aria-label="Attached files">
                 {uploadedFiles.map(file => <div className="attachment-preview" key={file.id}>
                   {file.previewUrl ? <img src={file.previewUrl} alt="" /> : <FileText size={20} />}
@@ -1446,7 +1485,10 @@ function App() {
               <div className="settings-neutral-row"><div><strong>Saved memory</strong><span>Review or remove saved preferences and summaries</span></div><button className="settings-action" onClick={() => void openMemoryManager()}>Manage</button></div>
               <div className="settings-neutral-row"><div><strong>Export my data</strong><span>Download memory, preferences, and conversations</span></div><button className="settings-action" onClick={() => void exportData()} disabled={!user}>Export</button></div>
             </div>}
-            {settingsDetail === "Account" && <div className="settings-card-neutral"><div className="settings-neutral-row"><div><strong>{user?.email || "Guest session"}</strong><span>{user ? "Your account is signed in" : "Sign in to sync your history"}</span></div><button className="settings-action" onClick={() => user ? void signOut() : openAccountAuth()}>{user ? "Sign out" : "Sign in"}</button></div></div>}
+            {settingsDetail === "Account" && <div className="settings-card-neutral">
+              <div className="settings-neutral-row"><div><strong>{user?.email || "Guest session"}</strong><span>{user ? "Your account is signed in" : "Sign in to sync your history"}</span></div><button className="settings-action" onClick={() => user ? void signOut() : openAccountAuth()}>{user ? "Sign out" : "Sign in"}</button></div>
+              <div className="settings-neutral-row"><div><strong>Account storage</strong><span>{connectionStatus === "connected" ? "Connected" : connectionStatus === "checking" ? "Checking connection…" : connectionStatus === "offline" ? "Server unavailable" : "Database unavailable"}</span></div><button className="settings-action" onClick={() => void checkServerConnection()}>Retry</button></div>
+            </div>}
             {settingsDetail === "About KOPLI AI" && <div className="settings-card-neutral about-brand"><span className="brand-mark"><img src="/logo.png" alt="KOPLI AI" /></span><div><strong>KOPLI AI</strong><span>Your personal AI workspace</span></div></div>}
           </div>}
           <div className="settings-search-wrap"><Search size={17} /><input value={settingsSearch} onChange={event => setSettingsSearch(event.target.value)} placeholder="Search settings" aria-label="Search settings" />
@@ -1474,8 +1516,8 @@ function App() {
         <section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
           <button className="dialog-close" aria-label="Close sign in" onClick={closeAuthDialog}><X size={19} /></button>
           <div className="auth-brand">KOPLI <span>AI</span></div>
-          <h1 id="auth-title">{authStage === "forgot" ? "Reset your password" : authStage === "reset" ? "Create new password" : registering ? "Create your account" : "Welcome back"}</h1>
-          <p>{authStage === "forgot" ? "Enter the email for your KOPLI AI account." : authStage === "reset" ? "Choose a new password for your account." : registering ? "Create an account to sync conversations and files." : "Sign in to your KOPLI AI account."}</p>
+          <h1 id="auth-title">{authStage === "forgot" ? "Reset your password" : authStage === "reset" ? "Create new password" : authStage === "verify" ? "Verify your email" : registering ? "Create your account" : "Welcome back"}</h1>
+          <p>{authStage === "forgot" ? "Enter the email for your KOPLI AI account." : authStage === "reset" ? "Choose a new password for your account." : authStage === "verify" ? "Confirm your email address to finish setting up your account." : registering ? "Create an account to sync conversations and files." : "Sign in to your KOPLI AI account."}</p>
           {authStage === "account" && <form onSubmit={event => void submitAuth(event)}>
             {registering && <label>Name<input autoComplete="name" value={authName} onChange={event => setAuthName(event.target.value)} required maxLength={100} /></label>}
             <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
@@ -1492,6 +1534,13 @@ function App() {
             <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Sending…" : "Send recovery email"}</button>
             <button className="auth-mode-toggle" type="button" onClick={() => { setAuthStage("account"); setAuthError(""); setAuthMessage(""); }}>Back to sign in</button>
           </form>}
+          {authStage === "verify" && <div className="auth-verification">
+            <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
+            {authError && <p className="auth-error" role="alert">{authError}</p>}
+            {authMessage && <p className="auth-success" role="status">{authMessage}</p>}
+            <button className="auth-submit" type="button" disabled={authBusy || !authEmail.trim()} onClick={() => void resendVerificationEmail()}>{authBusy ? "Please wait…" : "Send verification email"}</button>
+            <button className="auth-mode-toggle" type="button" onClick={() => { setAuthStage("account"); setRegistering(false); setAuthError(""); setAuthMessage(""); setAuthPassword(""); }}>Back to sign in</button>
+          </div>}
           {authStage === "reset" && <form onSubmit={event => void submitPasswordReset(event)}>
             {!resetToken && <p className="auth-error" role="alert">This reset link is missing or invalid. Request a new recovery email.</p>}
             <label>New password<span className="auth-password-field"><input type={showAuthPassword ? "text" : "password"} autoComplete="new-password" value={authPassword} onChange={event => setAuthPassword(event.target.value)} required minLength={12} /><button type="button" aria-label={showAuthPassword ? "Hide password" : "Show password"} aria-pressed={showAuthPassword} onClick={() => setShowAuthPassword(value => !value)}>{showAuthPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>

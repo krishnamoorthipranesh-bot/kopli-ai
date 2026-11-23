@@ -30,6 +30,10 @@ With no provider keys configured, chat works in clearly labeled demo mode. Searc
 - `TAVILY_API_KEY`: real-time web search
 - `STABILITY_API_KEY`: Stability text-to-image
 - `DATABASE_URL`: PostgreSQL/Prisma persistence for accounts, sessions, conversations, and saved files
-- `RESEND_API_KEY` and `RESEND_FROM_EMAIL`: password recovery email delivery; the sender must be verified with Resend
-- `APP_URL`: public app origin used in password recovery links; defaults to the production site
+- `RESEND_API_KEY` and `RESEND_FROM_EMAIL`: account verification and password recovery email delivery; the sender must be verified with Resend. `EMAIL_FROM` is accepted as a legacy sender variable.
+- `APP_URL`: public app origin used in verification and password recovery links; defaults to the production site
 - `PORT`: backend port, default `8787`
+
+## Render free-service wake-up
+
+The `Keep KOPLI AI available` GitHub Actions workflow requests the primary Render health endpoint every five minutes. This helps prevent the free web service from idling between visits. GitHub schedule runs can be delayed, and Render can still restart free instances, so this reduces cold starts but cannot guarantee zero loading screens. The workflow targets only `kopli-ai-1.onrender.com`.

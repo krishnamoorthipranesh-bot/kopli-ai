@@ -10,6 +10,7 @@ datasource db {
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
+  emailVerified Boolean @default(true)
   name      String?
   passwordHash String?
   role      String   @default("user")
@@ -24,6 +25,7 @@ model User {
   retrievalLogs MemoryRetrievalLog[]
   authSessions AuthSession[]
   passwordResetTokens PasswordResetToken[]
+  emailVerificationTokens EmailVerificationToken[]
 }
 
 model AuthSession {
@@ -38,6 +40,17 @@ model AuthSession {
 }
 
 model PasswordResetToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, expiresAt])
+}
+
+model EmailVerificationToken {
   id        String   @id @default(cuid())
   tokenHash String   @unique
   userId    String

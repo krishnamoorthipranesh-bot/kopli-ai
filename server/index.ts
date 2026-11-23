@@ -91,12 +91,47 @@ for (const dir of [storage, generated, uploads]) fs.mkdirSync(dir, { recursive: 
 
 const conversations = new Map<string, { id: string; title: string; archived: boolean; pinned: boolean; mode: string; messages: Array<{ role: "user" | "assistant"; content: string }> }>();
 const configured = (value?: string) => Boolean(value && !/^YOUR_/i.test(value) && !/^replace_/i.test(value));
+const resendApiKey = () => process.env.RESEND_API_KEY?.trim();
+const resendFromEmail = () => process.env.RESEND_FROM_EMAIL?.trim() || process.env.EMAIL_FROM?.trim();
+const resendConfigured = () => configured(resendApiKey()) && configured(resendFromEmail());
+async function sendAccountEmail(to: string, subject: string, text: string, html: string) {
+  const apiKey = resendApiKey();
+  const from = resendFromEmail();
+  if (!configured(apiKey) || !configured(from)) return { configured: false, sent: false };
+  try {
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(12000),
+      body: JSON.stringify({ from, to: [to], subject, text, html })
+    });
+    if (!response.ok) console.error("Account email provider returned HTTP", response.status);
+    return { configured: true, sent: response.ok };
+  } catch {
+    console.error("Account email delivery request failed.");
+    return { configured: true, sent: false };
+  }
+}
 const groq = aiConfig.groqConfigured ? new Groq({ apiKey: process.env.GROQ_API_KEY }) : null;
 const prisma = configured(process.env.DATABASE_URL) ? new PrismaClient() : null;
 let databaseReady = false;
 let databaseStatus: "not_configured" | "starting" | "ready" | "unavailable" = prisma ? "starting" : "not_configured";
 const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
 const hashToken = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
+
+function databaseUnavailableMessage(feature: string) {
+  if (databaseStatus === "starting") return `${feature} is temporarily unavailable while the database connection starts. Please try again shortly.`;
+  if (!prisma) return `${feature} is unavailable because DATABASE_URL is not configured on the server.`;
+  try {
+    const host = new URL(process.env.DATABASE_URL || "").hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (["localhost", "127.0.0.1", "::1"].includes(host)) {
+      return `${feature} is unavailable because DATABASE_URL points to a local loopback host. Configure a reachable PostgreSQL server in Render.`;
+    }
+  } catch {
+    return `${feature} is unavailable because DATABASE_URL is invalid. Configure a valid PostgreSQL connection string in Render.`;
+  }
+  return `${feature} is unavailable because the database connection failed. Check the PostgreSQL service and DATABASE_URL in Render.`;
+}
 
 async function createSession(userId: string, req: express.Request, res: express.Response) {
   if (!prisma || !databaseReady) throw new Error("Account database is unavailable.");
@@ -639,16 +674,31 @@ app.post("/api/auth/register", authRateLimit, async (req, res) => {
   const name = String(req.body?.name || "").trim().slice(0, 100);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
   if (password.length < 12) return res.status(400).json({ error: "Password must contain at least 12 characters." });
-  if (!prisma || !databaseReady) return res.status(503).json({ error: "Account service is unavailable while its database connection is being restored." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: databaseUnavailableMessage("Account creation") });
+  if (!resendConfigured()) return res.status(503).json({ error: "Email verification is not configured. Set RESEND_API_KEY and a verified RESEND_FROM_EMAIL (or EMAIL_FROM) on the server." });
   try {
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(409).json({ error: "An account with this email already exists." });
     const passwordHash = await bcrypt.hash(password, 12);
     const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
     const role = ownerEmail && email === ownerEmail ? "owner" : "user";
-    const user = await prisma.user.create({ data: { email, name, passwordHash, role } });
-    await createSession(user.id, req, res);
-    res.status(201).json({ user: { email: user.email, name: user.name, role } });
+    const user = await prisma.user.create({ data: { email, name, passwordHash, role, emailVerified: false } });
+    const token = crypto.randomBytes(32).toString("base64url");
+    const tokenHash = hashToken(token);
+    await prisma.emailVerificationToken.create({ data: { userId: user.id, tokenHash, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
+    const verificationUrl = new URL("/", process.env.APP_URL || "https://kopli-ai-1.onrender.com");
+    verificationUrl.searchParams.set("verifyToken", token);
+    const sent = await sendAccountEmail(
+      user.email,
+      "Verify your KOPLI AI email",
+      `Confirm your email address to finish creating your KOPLI AI account. This link expires in 24 hours.\n\n${verificationUrl.toString()}\n\nIf you did not create this account, you can ignore this email.`,
+      `<p>Confirm your email address to finish creating your KOPLI AI account. This link expires in 24 hours.</p><p><a href="${verificationUrl.toString()}">Verify email address</a></p><p>If you did not create this account, you can ignore this email.</p>`
+    );
+    if (!sent.sent) {
+      await prisma.user.delete({ where: { id: user.id } });
+      return res.status(sent.configured ? 502 : 503).json({ error: sent.configured ? "The verification email could not be sent. Check the sender configuration and try again." : "Email verification is not configured on the server." });
+    }
+    res.status(202).json({ email: user.email, verificationRequired: true, message: "Account created. Check your inbox for a verification link before signing in." });
   } catch (error) {
     console.error("Account registration failed:", error);
     if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
@@ -661,12 +711,13 @@ app.post("/api/auth/register", authRateLimit, async (req, res) => {
 app.post("/api/auth/login", authRateLimit, async (req, res) => {
   const email = String(req.body?.email || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
-  if (!prisma || !databaseReady) return res.status(503).json({ error: "Account service is unavailable while its database connection is being restored." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: databaseUnavailableMessage("Sign in") });
   try {
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user?.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
       return res.status(401).json({ error: "Invalid email or password." });
     }
+    if (!user.emailVerified) return res.status(403).json({ error: "Verify your email address before signing in.", code: "EMAIL_NOT_VERIFIED" });
     const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
     const role: "user" | "owner" = ownerEmail && user.email === ownerEmail ? "owner" : "user";
     if (user.role !== role) await prisma.user.update({ where: { id: user.id }, data: { role } });
@@ -678,8 +729,56 @@ app.post("/api/auth/login", authRateLimit, async (req, res) => {
   }
 });
 
+app.post("/api/auth/resend-verification", authRateLimit, async (req, res) => {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: databaseUnavailableMessage("Email verification") });
+  if (!resendConfigured()) return res.status(503).json({ error: "Email verification is not configured. Set RESEND_API_KEY and a verified RESEND_FROM_EMAIL (or EMAIL_FROM) on the server." });
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user || user.emailVerified) return res.json({ message: "If the account needs verification, a link has been sent." });
+
+  const token = crypto.randomBytes(32).toString("base64url");
+  const tokenHash = hashToken(token);
+  await prisma.emailVerificationToken.deleteMany({ where: { userId: user.id } });
+  await prisma.emailVerificationToken.create({ data: { userId: user.id, tokenHash, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
+  const verificationUrl = new URL("/", process.env.APP_URL || "https://kopli-ai-1.onrender.com");
+  verificationUrl.searchParams.set("verifyToken", token);
+  const sent = await sendAccountEmail(
+    user.email,
+    "Verify your KOPLI AI email",
+    `Confirm your email address to finish setting up your KOPLI AI account. This link expires in 24 hours.\n\n${verificationUrl.toString()}\n\nIf you did not create this account, you can ignore this email.`,
+    `<p>Confirm your email address to finish setting up your KOPLI AI account. This link expires in 24 hours.</p><p><a href="${verificationUrl.toString()}">Verify email address</a></p><p>If you did not create this account, you can ignore this email.</p>`
+  );
+  if (!sent.sent) {
+    await prisma.emailVerificationToken.deleteMany({ where: { tokenHash } });
+    return res.status(sent.configured ? 502 : 503).json({ error: "The verification email could not be sent. Check the verified sender configuration and try again." });
+  }
+  res.json({ message: "If the account needs verification, a link has been sent." });
+});
+
+app.post("/api/auth/verify-email", authRateLimit, async (req, res) => {
+  const token = String(req.body?.token || "");
+  if (!token) return res.status(400).json({ error: "The verification link is missing its token." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: databaseUnavailableMessage("Email verification") });
+  const verification = await prisma.emailVerificationToken.findFirst({
+    where: { tokenHash: hashToken(token), usedAt: null, expiresAt: { gt: new Date() } }
+  });
+  if (!verification) return res.status(400).json({ error: "This verification link is invalid or has expired. Request a new verification email." });
+  const verifiedAt = new Date();
+  await prisma.$transaction(async tx => {
+    const consumed = await tx.emailVerificationToken.updateMany({
+      where: { id: verification.id, usedAt: null, expiresAt: { gt: verifiedAt } },
+      data: { usedAt: verifiedAt }
+    });
+    if (!consumed.count) throw new Error("Verification link was already used or expired.");
+    await tx.user.update({ where: { id: verification.userId }, data: { emailVerified: true } });
+    await tx.emailVerificationToken.deleteMany({ where: { userId: verification.userId, id: { not: verification.id } } });
+  });
+  res.json({ message: "Email verified. You can now sign in to KOPLI AI." });
+});
+
 app.get("/api/auth/me", async (req, res) => {
-  if (!prisma || !databaseReady) return res.status(503).json({ error: "Account service is unavailable while its database connection is being restored." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: databaseUnavailableMessage("Account session") });
   const user = await currentUser(req, res);
   if (!user) return res.json({ authenticated: false });
   res.json({ authenticated: true, user: { email: user.email, name: user.name, role: user.role } });
@@ -688,9 +787,9 @@ app.get("/api/auth/me", async (req, res) => {
 app.post("/api/auth/forgot-password", authRateLimit, async (req, res) => {
   const email = String(req.body?.email || "").trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
-  if (!prisma || !databaseReady) return res.status(503).json({ error: "Password recovery is unavailable while the account database is disconnected." });
-  if (!configured(process.env.RESEND_API_KEY) || !configured(process.env.RESEND_FROM_EMAIL)) {
-    return res.status(503).json({ error: "Password recovery email is not configured. Set RESEND_API_KEY and a verified RESEND_FROM_EMAIL on the server." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: databaseUnavailableMessage("Password recovery") });
+  if (!resendConfigured()) {
+    return res.status(503).json({ error: "Password recovery email is not configured. Set RESEND_API_KEY and a verified RESEND_FROM_EMAIL (or EMAIL_FROM) on the server." });
   }
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) return res.json({ message: "If an account exists for that email, a password reset link has been sent." });
@@ -703,22 +802,15 @@ app.post("/api/auth/forgot-password", authRateLimit, async (req, res) => {
   const resetUrl = new URL("/", appUrl);
   resetUrl.searchParams.set("resetToken", token);
   try {
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(12000),
-      body: JSON.stringify({
-        from: process.env.RESEND_FROM_EMAIL,
-        to: [user.email],
-        subject: "Reset your KOPLI AI password",
-        text: `Use this secure link to create a new KOPLI AI password. It expires in 30 minutes.\n\n${resetUrl.toString()}\n\nIf you did not request this, you can ignore this email.`,
-        html: `<p>Use this secure link to create a new KOPLI AI password. It expires in 30 minutes.</p><p><a href="${resetUrl.toString()}">Create a new password</a></p><p>If you did not request this, you can ignore this email.</p>`
-      })
-    });
-    if (!response.ok) {
+    const sent = await sendAccountEmail(
+      user.email,
+      "Reset your KOPLI AI password",
+      `Use this secure link to create a new KOPLI AI password. It expires in 30 minutes.\n\n${resetUrl.toString()}\n\nIf you did not request this, you can ignore this email.`,
+      `<p>Use this secure link to create a new KOPLI AI password. It expires in 30 minutes.</p><p><a href="${resetUrl.toString()}">Create a new password</a></p><p>If you did not request this, you can ignore this email.</p>`
+    );
+    if (!sent.sent) {
       await prisma.passwordResetToken.deleteMany({ where: { tokenHash: hashToken(token) } });
-      console.error("Password recovery email provider returned:", response.status);
-      return res.status(502).json({ error: "The recovery email could not be sent. Check the verified sender configuration and try again." });
+      return res.status(sent.configured ? 502 : 503).json({ error: "The recovery email could not be sent. Check the verified sender configuration and try again." });
     }
     res.json({ message: "If an account exists for that email, a password reset link has been sent." });
   } catch (error) {
@@ -733,7 +825,7 @@ app.post("/api/auth/reset-password", authRateLimit, async (req, res) => {
   const password = String(req.body?.password || "");
   if (!token) return res.status(400).json({ error: "The password reset link is missing its token." });
   if (password.length < 12) return res.status(400).json({ error: "Password must contain at least 12 characters." });
-  if (!prisma || !databaseReady) return res.status(503).json({ error: "Password reset is unavailable while the account database is disconnected." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: databaseUnavailableMessage("Password reset") });
   const resetToken = await prisma.passwordResetToken.findFirst({
     where: { tokenHash: hashToken(token), usedAt: null, expiresAt: { gt: new Date() } }
   });
