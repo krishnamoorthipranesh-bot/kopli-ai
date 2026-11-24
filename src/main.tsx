@@ -929,14 +929,11 @@ function App() {
         }
         const contentType = response.headers.get("content-type") || "";
         if (contentType.includes("application/json")) {
-          const result = await response.json() as { response?: string; openAdmin?: boolean; error?: string };
+          const result = await response.json() as { response?: string; error?: string };
           if (result.error && !result.response) throw new Error(result.error);
           setMessages(previous => previous.map(message => message.id === assistantId
             ? { ...message, content: result.response || result.error || "Command processed.", streaming: false }
             : message));
-          if (result.openAdmin) {
-            void loadAdmin();
-          }
           return;
         }
         if (!response.body) throw new Error("The chat response stream is unavailable.");
@@ -1323,7 +1320,6 @@ function App() {
             const label = ({Chat:"AI Assistant",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[item.label];
             return <button key={item.label} className={section === item.label ? "active" : ""} aria-label={label} title={label} aria-current={section === item.label ? "page" : undefined} onClick={() => chooseSection(item.label)}><Icon size={18} aria-hidden="true" /><span>{label}</span></button>;
           })}
-          {user?.role === "owner" && <button className={section === "Admin" ? "active" : ""} aria-label="Admin" title="Admin" onClick={() => void loadAdmin()}><Shield size={18} aria-hidden="true" /><span>Admin</span></button>}
         </nav>
         <button className="sidebar-about" aria-label="About KOPLI AI" title="About KOPLI AI" onClick={() => { setSection("Settings"); setSettingsDetail("About KOPLI AI"); setSidebarOpen(false); }}><CircleHelp size={17} aria-hidden="true" /><span>About KOPLI AI</span></button>
         <div className="history">
@@ -1510,7 +1506,6 @@ function App() {
               <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("Data & memory")}><Brain size={18} /><span>Data &amp; memory</span><ChevronRight size={17} /></button>
               <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("About KOPLI AI")}><CircleHelp size={18} /><span>About KOPLI AI</span><ChevronRight size={17} /></button>
               <button className="settings-neutral-row-button" onClick={() => user ? void signOut() : openAccountAuth()}>{user ? <LogOut size={18} /> : <LogIn size={18} />}<span>{user ? "Sign out" : "Sign in or create account"}</span><ChevronRight size={17} /></button>
-              {user?.role === "owner" && <button className="settings-neutral-row-button" onClick={() => void loadAdmin()}><Shield size={18} /><span>Admin status</span><ChevronRight size={17} /></button>}
             </div>
           </div> : <div className="settings-detail">
             <button className="settings-detail-back" onClick={() => setSettingsDetail("")}><ChevronLeft size={17} /> Settings</button><h2>{settingsDetail}</h2>
