@@ -11,8 +11,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { inflateRawSync } from "node:zlib";
 import Groq from "groq-sdk";
 import { GeminiProviderError, isTransientProviderError, streamGeminiResponse } from "./gemini-provider.js";
@@ -176,64 +174,27 @@ async function currentUser(req: express.Request, res?: express.Response) {
 async function initializeDatabase() {
   if (!prisma) return;
   databaseStatus = "starting";
-  console.log("Applying database migrations in the background...");
-  const execute = promisify(execFile);
-  const command = process.platform === "win32" ? "npx.cmd" : "npx";
-  const migrationTimeout = 120000;
-  const runPrisma = (args: string[]) => execute(command, args, {
-    cwd: root,
-    timeout: migrationTimeout,
-    maxBuffer: 1024 * 1024
-  });
+  console.log("Connecting to the configured PostgreSQL database in the background...");
 
+  // Supabase schema migrations are managed separately. Do not run Prisma CLI
+  // migrations from every web instance during zero-downtime deploys: concurrent
+  // instances can contend for Prisma's migration advisory lock.
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
-      await runPrisma(["prisma", "migrate", "deploy"]);
       await prisma.$connect();
+      await prisma.$queryRaw`SELECT 1`;
       databaseReady = true;
       databaseStatus = "ready";
-      console.log("Database migrations applied; account and persistence features are ready.");
+      console.log("Database connection verified; account and persistence features are ready.");
       return;
     } catch (error) {
-      const details = error as { stdout?: string; stderr?: string; message?: string };
-      const errorText = [details.stderr, details.stdout, details.message].filter(Boolean).join("\n");
-
-      // The Supabase schema was provisioned from these exact migration files before
-      // Prisma's own migration ledger existed. Baseline only that known existing schema.
-      if (errorText.includes("P3005")) {
-        try {
-          console.warn("Existing Supabase schema detected; recording the already-applied Prisma migrations.");
-          const existingMigrations = [
-            "0_init",
-            "202611230001_auth_sessions_and_recovery",
-            "202611230002_email_verification"
-          ];
-          for (const migration of existingMigrations) {
-            try {
-              await runPrisma(["prisma", "migrate", "resolve", "--applied", migration]);
-            } catch (baselineError) {
-              const baselineDetails = baselineError as { stdout?: string; stderr?: string; message?: string };
-              const baselineText = [baselineDetails.stderr, baselineDetails.stdout, baselineDetails.message].filter(Boolean).join("\n");
-              if (!baselineText.includes("P3008")) throw baselineError;
-            }
-          }
-          await runPrisma(["prisma", "migrate", "deploy"]);
-          await prisma.$connect();
-          databaseReady = true;
-          databaseStatus = "ready";
-          console.log("Existing Supabase schema baselined; Prisma migrations are up to date and persistence is ready.");
-          return;
-        } catch (baselineError) {
-          console.error("Could not baseline the existing Supabase schema safely.", baselineError);
-        }
-      }
-
       databaseReady = false;
       databaseStatus = attempt === 3 ? "unavailable" : "starting";
-      console.error(`Database initialization attempt ${attempt + 1} of 4 failed.`, error);
+      console.error(`Database connection attempt ${attempt + 1} of 4 failed.`, error);
       if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
     }
   }
+
   console.error("Database remains unavailable; the server will continue to serve guest requests.");
   const retry = setTimeout(() => { void initializeDatabase(); }, 30000);
   retry.unref();
