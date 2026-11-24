@@ -1223,7 +1223,7 @@ function App() {
     const recognition = new Recognition();
     const language = (preferences.language || "ta-IN").toLowerCase();
     const speechLanguage = language === "tanglish" ? "en-IN"
-      : language === "en" || language === "english" || language === "en-in" ? "en-IN"
+      : language === "en" ? "ta-IN" : language === "english" || language === "en-in" ? "en-IN"
         : language === "en-us" ? "en-US"
           : language === "hindi" ? "hi-IN"
             : language === "malayalam" ? "ml-IN"

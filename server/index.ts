@@ -1028,7 +1028,7 @@ app.post("/api/chat", async (req, res) => {
               ? "You are KOPLI AI. Be precise, distinguish facts from uncertainty, and do not invent sources."
               : "You are KOPLI AI. Be clear, accurate, and helpful.";
       const languagePreference = (preference?.language || "").toLowerCase();
-      const languageGuidance = languagePreference === "ta-in" || languagePreference === "ta" || languagePreference === "tamil"
+      const languageGuidance = languagePreference === "ta-in" || languagePreference === "ta" || languagePreference === "tamil" || languagePreference === "en"
         ? "The user's preferred language is Tamil. Reply naturally in Tamil script unless they explicitly ask for another language."
         : languagePreference === "tanglish"
           ? "The user's preferred language is Tanglish. Reply in natural spoken Tamil-English mix using Latin letters, matching their wording."
@@ -1044,7 +1044,7 @@ app.post("/api/chat", async (req, res) => {
       const personalityGuidance = preference?.personality && !["smart", "balanced", "adaptive"].includes(preference.personality.toLowerCase())
         ? `Preferred conversation style: ${preference.personality}. Apply it naturally while still adapting to the user's emotional tone.`
         : "Use an adaptive, friendly, natural conversational style.";
-      const protectedSystem = [system, proprietaryDisclosurePolicy, languageGuidance, toneGuidance, personalityGuidance].join("\\n\\n");
+      const protectedSystem = [system, proprietaryDisclosurePolicy, languageGuidance, toneGuidance, personalityGuidance].join("\n\n");
       let memoryContext = "";
       if (authenticatedUser && prisma) {
         if (preference?.crossChat && !containsSensitiveSecret(message)) {
