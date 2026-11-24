@@ -1358,8 +1358,8 @@ app.post("/api/images/generate", async (req, res) => {
   if (!prompt) return res.status(400).json({ error: "Image prompt cannot be empty." });
   if (prompt.length > 2048) return res.status(400).json({ error: "Image prompts must be 2,048 characters or fewer." });
 
-  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
-  const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || "";
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim() || "";
   if (!configured(accountId) || !configured(apiToken)) {
     return res.status(503).json({ error: "Cloudflare image generation is not configured on the server. The Cloudflare Account ID and Workers AI API token must be set in Render." });
   }
