@@ -675,30 +675,15 @@ app.post("/api/auth/register", authRateLimit, async (req, res) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
   if (password.length < 12) return res.status(400).json({ error: "Password must contain at least 12 characters." });
   if (!prisma || !databaseReady) return res.status(503).json({ error: databaseUnavailableMessage("Account creation") });
-  if (!resendConfigured()) return res.status(503).json({ error: "Email verification is not configured. Set RESEND_API_KEY and a verified RESEND_FROM_EMAIL (or EMAIL_FROM) on the server." });
   try {
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(409).json({ error: "An account with this email already exists." });
     const passwordHash = await bcrypt.hash(password, 12);
     const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
     const role = ownerEmail && email === ownerEmail ? "owner" : "user";
-    const user = await prisma.user.create({ data: { email, name, passwordHash, role, emailVerified: false } });
-    const token = crypto.randomBytes(32).toString("base64url");
-    const tokenHash = hashToken(token);
-    await prisma.emailVerificationToken.create({ data: { userId: user.id, tokenHash, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
-    const verificationUrl = new URL("/", process.env.APP_URL || "https://kopli-ai-1.onrender.com");
-    verificationUrl.searchParams.set("verifyToken", token);
-    const sent = await sendAccountEmail(
-      user.email,
-      "Verify your KOPLI AI email",
-      `Confirm your email address to finish creating your KOPLI AI account. This link expires in 24 hours.\n\n${verificationUrl.toString()}\n\nIf you did not create this account, you can ignore this email.`,
-      `<p>Confirm your email address to finish creating your KOPLI AI account. This link expires in 24 hours.</p><p><a href="${verificationUrl.toString()}">Verify email address</a></p><p>If you did not create this account, you can ignore this email.</p>`
-    );
-    if (!sent.sent) {
-      await prisma.user.delete({ where: { id: user.id } });
-      return res.status(sent.configured ? 502 : 503).json({ error: sent.configured ? "The verification email could not be sent. Check the sender configuration and try again." : "Email verification is not configured on the server." });
-    }
-    res.status(202).json({ email: user.email, verificationRequired: true, message: "Account created. Check your inbox for a verification link before signing in." });
+    const user = await prisma.user.create({ data: { email, name, passwordHash, role, emailVerified: true } });
+    await createSession(user.id, req, res);
+    res.status(201).json({ user: { email: user.email, name: user.name, role } });
   } catch (error) {
     console.error("Account registration failed:", error);
     if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
@@ -717,7 +702,6 @@ app.post("/api/auth/login", authRateLimit, async (req, res) => {
     if (!user?.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
       return res.status(401).json({ error: "Invalid email or password." });
     }
-    if (!user.emailVerified) return res.status(403).json({ error: "Verify your email address before signing in.", code: "EMAIL_NOT_VERIFIED" });
     const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
     const role: "user" | "owner" = ownerEmail && user.email === ownerEmail ? "owner" : "user";
     if (user.role !== role) await prisma.user.update({ where: { id: user.id }, data: { role } });
