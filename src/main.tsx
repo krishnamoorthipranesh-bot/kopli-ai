@@ -1065,7 +1065,7 @@ function App() {
     setAuthMessage("");
     try {
       const result = await request<{ message: string }>("/api/auth/forgot-password", jsonRequest("POST", { email: authEmail }));
-      setAuthMessage(result.message);
+      setAuthMessage("If an account exists, a secure reset link has been sent. Open that link to go straight to Create New Password and Confirm New Password.");
     } catch (error) { setAuthError(errorText(error)); }
     finally { setAuthBusy(false); }
   }
@@ -1584,7 +1584,7 @@ function App() {
           <button className="dialog-close" aria-label="Close sign in" onClick={closeAuthDialog}><X size={19} /></button>
           <div className="auth-brand">KOPLI <span>AI</span></div>
           <h1 id="auth-title">{authStage === "forgot" ? "Reset your password" : authStage === "reset" ? "Create new password" : authStage === "verify" ? "Verify your email" : registering ? "Create your account" : "Welcome back"}</h1>
-          <p>{authStage === "forgot" ? "Enter the email for your KOPLI AI account." : authStage === "reset" ? "Choose a new password for your account." : authStage === "verify" ? "Confirm your email address to finish setting up your account." : registering ? "Create an account to sync conversations and files." : "Sign in to your KOPLI AI account."}</p>
+          <p>{authStage === "forgot" ? "Enter your account email. The secure link opens the new-password form directly." : authStage === "reset" ? "Choose a new password for your account." : authStage === "verify" ? "Confirm your email address to finish setting up your account." : registering ? "Create an account to sync conversations and files." : "Sign in to your KOPLI AI account."}</p>
           {authStage === "account" && <form onSubmit={event => void submitAuth(event)}>
             {registering && <label>Name<input autoComplete="name" value={authName} onChange={event => setAuthName(event.target.value)} required maxLength={100} /></label>}
             <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
@@ -1598,7 +1598,7 @@ function App() {
             <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
             {authError && <p className="auth-error" role="alert">{authError}</p>}
             {authMessage && <p className="auth-success" role="status">{authMessage}</p>}
-            <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Sending…" : "Send recovery email"}</button>
+            <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Sending…" : "Send password reset link"}</button>
             <button className="auth-mode-toggle" type="button" onClick={() => { setAuthStage("account"); setAuthError(""); setAuthMessage(""); }}>Back to sign in</button>
           </form>}
           {authStage === "verify" && <div className="auth-verification">

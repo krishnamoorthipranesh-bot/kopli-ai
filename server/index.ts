@@ -1636,7 +1636,7 @@ async function generateStructuredContent(prompt: string, topic: string, format: 
   try {
     const response = await groq.chat.completions.create({
       model: aiConfig.groqModel,
-      temperature: 0.35,
+      temperature: 0.15,
       messages: [
         { role: "system", content: systemPrompt + "\n\n" + proprietaryDisclosurePolicy },
         { role: "user", content: `Topic/request: ${prompt}\nTopic title: ${topic}` }
