@@ -264,7 +264,6 @@ function MessageView({
   const isUser = message.role === "user";
   return (
     <article className={`message ${message.role}${message.streaming ? " streaming" : ""}`}>
-      {!isUser && <div className="message-avatar" aria-hidden="true"><img className="hen-image hen-small" src="/logo.png" alt="" /></div>}
       <div className="message-user-content">
         <div className="message-content">
           {message.content
