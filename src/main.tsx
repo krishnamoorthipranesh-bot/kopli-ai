@@ -222,13 +222,13 @@ function errorText(error: unknown) {
 
 function detectCreationIntent(prompt: string): { type: "image" | "document"; format?: "docx" | "pdf" | "pptx" | "xlsx" } | null {
   const text = prompt.trim();
-  const action = /\\b(create|generate|make|build|prepare|design|draw|write|draft)\\b/i;
+  const action = /\b(create|generate|make|build|prepare|design|draw|write|draft)\b/i;
   if (!action.test(text)) return null;
-  if (/\\b(image|picture|photo|illustration|artwork|wallpaper)\\b/i.test(text)) return { type: "image" };
-  if (/\\b(power\\s*point|powerpoint|pptx?|slides?|slide deck|presentation)\\b/i.test(text)) return { type: "document", format: "pptx" };
-  if (/\\b(pdf)\\b/i.test(text)) return { type: "document", format: "pdf" };
-  if (/\\b(excel|spreadsheet|workbook|xlsx?)\\b/i.test(text)) return { type: "document", format: "xlsx" };
-  if (/\\b(word|docx|word document|document|report|assignment|project report|resume|cv)\\b/i.test(text)) return { type: "document", format: "docx" };
+  if (/\b(image|picture|photo|illustration|artwork|wallpaper)\b/i.test(text)) return { type: "image" };
+  if (/\b(power\s*point|powerpoint|pptx?|slides?|slide deck|presentation)\b/i.test(text)) return { type: "document", format: "pptx" };
+  if (/\b(pdf)\b/i.test(text)) return { type: "document", format: "pdf" };
+  if (/\b(excel|spreadsheet|workbook|xlsx?)\b/i.test(text)) return { type: "document", format: "xlsx" };
+  if (/\b(word|docx|word document|document|report|assignment|project report|resume|cv)\b/i.test(text)) return { type: "document", format: "docx" };
   return null;
 }
 
@@ -861,7 +861,7 @@ function App() {
               150000
             );
             const previewUrl = `data:${result.mimeType};base64,${result.imageData}`;
-            assistantContent = `Your image is ready. [Open or download the full image]( ${result.url} )`;
+            assistantContent = `Your image is ready. [Open or download the full image](${result.url})`;
             generatedAttachments = [{ fileName: result.fileName, mimeType: result.mimeType, previewUrl }];
             setImageHistory(previous => [{ prompt: text, previewUrl, fileName: result.fileName }, ...previous].slice(0, 5));
           } else {
