@@ -1199,6 +1199,28 @@ app.post("/api/conversations", async (req, res) => {
   const conversation = await prisma.conversation.create({ data: { id, title, mode, userId: user.id } });
   res.status(201).json({ id: conversation.id, title: conversation.title, mode: conversation.mode, messages: [] });
 });
+app.post("/api/conversations/:id/artifacts", async (req, res) => {
+  const user = await currentUser(req);
+  if (!user) return res.status(401).json({ error: "Sign in to save generated chat files." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: "Conversation storage is not ready." });
+  const id = path.basename(req.params.id);
+  if (!id || id !== req.params.id) return res.status(400).json({ error: "Conversation ID is invalid." });
+  const userMessage = String(req.body?.userMessage || "").trim().slice(0, 10000);
+  const assistantMessage = String(req.body?.assistantMessage || "").trim().slice(0, 10000);
+  const title = String(req.body?.title || userMessage || "Generated file").trim().slice(0, 100);
+  const mode = String(req.body?.mode || "smart").slice(0, 30);
+  if (!userMessage || !assistantMessage) return res.status(400).json({ error: "Both chat messages are required." });
+  const existing = await prisma.conversation.findUnique({ where: { id }, select: { id: true, userId: true } });
+  if (existing && existing.userId !== user.id) return res.status(404).json({ error: "Conversation not found." });
+  if (!existing) await prisma.conversation.create({ data: { id, title, mode, userId: user.id } });
+  await prisma.message.createMany({ data: [
+    { conversationId: id, role: "user", content: userMessage },
+    { conversationId: id, role: "assistant", content: assistantMessage }
+  ] });
+  await prisma.conversation.update({ where: { id }, data: { title, mode, updatedAt: new Date() } });
+  return res.json({ saved: true, conversationId: id });
+});
+
 app.patch("/api/conversations/:id", async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Authentication required." });
