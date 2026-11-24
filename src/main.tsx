@@ -931,14 +931,6 @@ function App() {
         email: authEmail,
         password: authPassword
       }));
-      if (registering) {
-        setAuthEmail(authEmail.trim().toLowerCase());
-        setAuthStage("verify");
-        setAuthMessage(result.message || "Check your inbox for a verification link before signing in.");
-        setAuthPassword("");
-        setAuthPasswordConfirmation("");
-        return;
-      }
       if (!result.user) throw new Error("The account service returned an incomplete sign-in response.");
       setUser(result.user);
       setActiveId(null);
@@ -950,13 +942,7 @@ function App() {
       setAuthPasswordConfirmation("");
       setConnectionStatus("connected");
     } catch (error) {
-      if (error instanceof ApiError && error.code === "EMAIL_NOT_VERIFIED") {
-        setAuthEmail(authEmail.trim().toLowerCase());
-        setAuthStage("verify");
-        setAuthPassword("");
-        setAuthPasswordConfirmation("");
-        setAuthMessage("Verify your email address before signing in. You can request another verification link below.");
-      } else setAuthError(errorText(error));
+      setAuthError(errorText(error));
     }
     finally { setAuthBusy(false); }
   }
