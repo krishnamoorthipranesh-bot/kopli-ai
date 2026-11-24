@@ -1373,7 +1373,7 @@ function App() {
               </div>}
             </div>
           </div>}
-        </div>/header>
+        </div>
 
                 {section === "Chat" && <>
                     <section className="chat-shell" aria-label="Chat">
