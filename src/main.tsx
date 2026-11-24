@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import {
   ArrowLeft, Brain, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Code2,
   Copy, Download, Eye, EyeOff, FileText, Files, Globe2, Image as ImageIcon, Images, Library,
-  LogIn, LogOut, Menu, Mic, CircleHelp, MoreHorizontal, Plus, Search,
+  LogIn, LogOut, Menu, Mic, CircleHelp, MoreHorizontal, Plus, Search, Share2, LockKeyhole, Folder,
   Send, Settings, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
   UserRound, Volume2, X, Zap
 } from "lucide-react";
@@ -316,6 +316,8 @@ function App() {
   const [mode, setMode] = useState<Mode>("smart");
   const [headerModeOpen, setHeaderModeOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [chatActionsOpen, setChatActionsOpen] = useState(false);
+  const [chatLocked, setChatLocked] = useState(false);
   const [composerModeOpen, setComposerModeOpen] = useState(false);
   const [dark, setDark] = useState(() => {
     try { return localStorage.getItem("kopli.theme") === "dark"; }
@@ -1297,6 +1299,18 @@ function App() {
   }, [section]);
 
 
+  async function shareCurrentChat() {
+    setChatActionsOpen(false);
+    const transcript = messages.map(message => `${message.role === "user" ? "You" : "KOPLI AI"}: ${message.content}`).join("\\n\\n");
+    if (!transcript.trim()) { setNotice("There is no chat to share yet."); return; }
+    try {
+      await navigator.clipboard.writeText(transcript);
+      setNotice("Chat copied. You can now share it.");
+    } catch {
+      setNotice("Chat sharing is not available in this browser.");
+    }
+  }
+
   function chooseSection(next: Section) {
     setSection(next);
     setSidebarOpen(false);
@@ -1345,21 +1359,21 @@ function App() {
       </aside>
 
       <main className="main">
-        <header className="topbar topbar-minimal">
-          <button className={`icon-button ${mobileViewport ? "mobile-menu" : "sidebar-toggle"}`} aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"} onClick={() => setSidebarOpen(value => !value)}><Menu size={19} /></button>
-          <div className="top-actions top-actions-minimal">
-            <button className="icon-button" aria-label="Search" title="Search" onClick={() => chooseSection("Search")}><Search size={18} /></button>
-            <div className="profile-menu-wrap">
-              <button className="header-avatar" aria-label={user ? `Account menu for ${user.email}` : "Sign in"} aria-expanded={profileMenuOpen} onClick={() => user ? setProfileMenuOpen(value => !value) : openAccountAuth()}>{user ? (user.name || user.email).slice(0,2).toUpperCase() : <UserRound size={18} />}</button>
-              {user && profileMenuOpen && <div className="profile-dropdown">
-                <div className="profile-dropdown-account"><span className="avatar"><UserRound size={16} /></span><span><strong>KOPLI AI ACCOUNT</strong><span>{user.email}</span></span></div>
-                <button onClick={() => { chooseSection("Settings"); setProfileMenuOpen(false); }}><UserRound size={16}/><span>Account settings</span></button>
-                <button onClick={() => { chooseSection("Settings"); setProfileMenuOpen(false); }}><Settings size={16}/><span>Preferences</span></button>
-                <button className="profile-logout" onClick={() => void signOut()}><LogOut size={16}/><span>Log out</span></button>
+        <div className="chat-floating-controls" aria-label="Chat controls">
+          <button className="icon-button floating-menu-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} title="Menu" onClick={() => setSidebarOpen(value => !value)}><Menu size={20} /></button>
+          {section === "Chat" && <div className="chat-floating-actions">
+            <button className="floating-new-chat" type="button" onClick={() => { setChatLocked(false); newChat(); }}><Plus size={17} /><span>New chat</span></button>
+            <div className="chat-actions-wrap">
+              <button className="icon-button floating-more-button" type="button" aria-label="Chat options" title="Chat options" aria-expanded={chatActionsOpen} onClick={() => setChatActionsOpen(value => !value)}><MoreHorizontal size={20} /></button>
+              {chatActionsOpen && <div className="chat-actions-menu" role="menu" aria-label="Chat options">
+                <button type="button" role="menuitem" onClick={() => void shareCurrentChat()}><Share2 size={17} /><span>Share chat</span></button>
+                <button type="button" role="menuitem" onClick={() => { setChatLocked(value => !value); setChatActionsOpen(false); }}><LockKeyhole size={17} /><span>{chatLocked ? "Unlock chat" : "Lock chat"}</span></button>
+                <button type="button" role="menuitem" onClick={() => { setChatActionsOpen(false); chooseSection("Explore"); }}><Folder size={17} /><span>Projects</span></button>
+                <button type="button" role="menuitem" onClick={() => { setChatActionsOpen(false); fileInputRef.current?.click(); }}><Files size={17} /><span>Upload files</span></button>
               </div>}
             </div>
-          </div>
-        </header>
+          </div>}
+        </div>/header>
 
                 {section === "Chat" && <>
                     <section className="chat-shell" aria-label="Chat">
@@ -1390,7 +1404,7 @@ function App() {
                 {uploadBusy && <div className="attachment-progress" role="status"><span>Uploading attachments</span><progress max={100} value={uploadProgress} /><small>{uploadProgress}%</small></div>}
               </div>}
               <form className="composer" onSubmit={event => void sendMessage(event)}>
-                <textarea ref={textareaRef} className="composer-input" value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
+                <textarea ref={textareaRef} className="composer-input" value={prompt} disabled={streaming || chatLocked} onChange={event => setPrompt(event.target.value)} onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
                   if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); }
                 }} placeholder="Work with KOPLI AI" aria-label="Message KOPLI AI" rows={2} disabled={streaming} />
                 <div className="composer-toolbar">

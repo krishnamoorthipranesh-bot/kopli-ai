@@ -751,3 +751,83 @@
 @media (max-width: 767px) {
   .topbar.topbar-minimal { min-height: 52px; height: 52px; padding: 0 12px; }
 }
+
+
+/* Frameless ChatGPT-inspired chat controls and compact conversation rhythm */
+.main { position:relative; min-width:0; }
+.chat-floating-controls {
+  position:absolute; z-index:60; top:12px; left:14px; right:14px;
+  display:flex; align-items:center; justify-content:space-between; pointer-events:none;
+}
+.chat-floating-controls > *, .chat-floating-actions, .chat-actions-wrap { pointer-events:auto; }
+.chat-floating-controls .floating-menu-button,
+.chat-floating-controls .floating-more-button {
+  width:42px; height:42px; min-width:42px; min-height:42px;
+  display:grid; place-items:center; border:1px solid #e5e5e5;
+  border-radius:50%; background:rgba(255,255,255,.97); color:#303030;
+  box-shadow:0 1px 3px rgba(0,0,0,.05);
+}
+.chat-floating-controls .floating-menu-button:hover,
+.chat-floating-controls .floating-more-button:hover { background:#f5f5f5; }
+.chat-floating-actions { display:flex; align-items:center; gap:8px; }
+.floating-new-chat {
+  display:inline-flex; align-items:center; justify-content:center; gap:7px;
+  min-height:42px; padding:0 14px; border:1px solid #e5e5e5; border-radius:22px;
+  background:#fff; color:#303030; font-family:inherit; font-size:13px; font-weight:600;
+  box-shadow:0 1px 3px rgba(0,0,0,.04);
+}
+.floating-new-chat:hover { background:#f5f5f5; }
+.chat-actions-wrap { position:relative; }
+.chat-actions-menu {
+  position:absolute; top:50px; right:0; z-index:80; width:210px; padding:6px;
+  border:1px solid #e5e5e5; border-radius:14px; background:#fff;
+  box-shadow:0 12px 36px rgba(0,0,0,.13);
+}
+.chat-actions-menu button {
+  display:flex; align-items:center; gap:11px; width:100%; min-height:42px;
+  padding:0 10px; border:0; border-radius:9px; background:transparent;
+  color:#292929; text-align:left; font-family:inherit; font-size:13px; font-weight:500;
+}
+.chat-actions-menu button:hover { background:#f3f3f3; }
+.chat-shell { padding-top:58px; background:#fff !important; }
+.app:not(.dark) .chat-shell { background:#fff !important; }
+.messages { padding-top:18px; }
+.message { margin-bottom:20px !important; }
+.message-content { color:#252525; }
+.message.assistant .message-content,
+.dark .message.assistant .message-content { font-size:16px; line-height:1.65; }
+.message-content p { margin:0 0 12px !important; line-height:1.65 !important; }
+.message-content p:last-child { margin-bottom:0 !important; }
+.message-content h1,.message-content h2,.message-content h3 { margin:18px 0 8px !important; }
+.message-content ul,.message-content ol { margin:8px 0 14px !important; }
+.app:not(.dark) .message.user .message-content {
+  color:#252525 !important; background:#f4f4f4 !important; border:0 !important; border-radius:18px !important;
+}
+.app:not(.dark) .message.user .message-content p { color:#252525 !important; }
+.app:not(.dark) { background:#fff !important; color:#252525; }
+.app:not(.dark) .main { background:#fff; }
+.app:not(.dark) .composer {
+  background:#fff !important; border:1px solid #e5e5e5 !important;
+  box-shadow:0 5px 22px rgba(0,0,0,.07) !important;
+}
+.app:not(.dark) .composer-input { color:#252525; }
+.app:not(.dark) .composer .composer-button { color:#555; }
+.app:not(.dark) .composer .send-button { background:#202020; color:#fff; box-shadow:none; }
+.app:not(.dark) .composer .send-button:disabled { background:#e5e5e5; color:#999; }
+.app:not(.dark) .welcome { background:#fff; }
+.app:not(.dark) .welcome h1 { color:#252525; }
+@media (max-width:767px) {
+  .chat-floating-controls { top:8px; left:10px; right:10px; }
+  .chat-floating-controls .floating-menu-button,
+  .chat-floating-controls .floating-more-button { width:40px; height:40px; min-width:40px; min-height:40px; }
+  .floating-new-chat { min-height:40px; padding:0 12px; }
+  .chat-shell { padding-top:54px; }
+  .messages { padding-top:14px; }
+  .message { margin-bottom:18px !important; }
+}
+.dark .chat-floating-controls .floating-menu-button,
+.dark .chat-floating-controls .floating-more-button,
+.dark .floating-new-chat { background:#202020; border-color:#3a3a3a; color:#f2f2f2; }
+.dark .chat-actions-menu { background:#202020; border-color:#3a3a3a; }
+.dark .chat-actions-menu button { color:#f2f2f2; }
+.dark .chat-actions-menu button:hover { background:#303030; }
