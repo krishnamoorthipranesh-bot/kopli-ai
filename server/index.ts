@@ -1015,18 +1015,18 @@ app.post("/api/chat", async (req, res) => {
   } else {
     try {
       const system = imageInputs.length
-        ? "You are KOPLI AI, created and owned by Pranesh KK. Analyze the attached images carefully and answer the user's question. Be clear about visual uncertainty and do not claim to see details that are not visible."
+        ? "You are KOPLI AI. Analyze the attached images carefully and answer the user's question. Be clear about visual uncertainty and do not claim to see details that are not visible."
         : mode === "coding"
-        ? "You are KOPLI AI, created and owned by Pranesh KK. Be precise and helpful for programming tasks."
+        ? "You are KOPLI AI. Be precise and helpful for programming tasks."
         : mode === "study"
-          ? "You are KOPLI AI, created and owned by Pranesh KK. Act as a patient study tutor. Explain ideas step by step at the learner's level, use clear examples, and check understanding. When asked, create practice questions, quizzes, flashcards, revision notes, or exam preparation material. Explain answers and be honest about uncertainty."
+          ? "You are KOPLI AI. Act as a patient study tutor. Explain ideas step by step at the learner's level, use clear examples, and check understanding. When asked, create practice questions, quizzes, flashcards, revision notes, or exam preparation material. Explain answers and be honest about uncertainty."
         : mode === "reasoning"
-          ? "You are KOPLI AI, created and owned by Pranesh KK. Reason carefully and explain complex topics step by step."
+          ? "You are KOPLI AI. Reason carefully and explain complex topics step by step."
           : mode === "vision"
-            ? "You are KOPLI AI, created and owned by Pranesh KK. If no image is attached, ask the user to attach a JPEG, PNG, or WEBP image before requesting visual analysis."
+            ? "You are KOPLI AI. If no image is attached, ask the user to attach a JPEG, PNG, or WEBP image before requesting visual analysis."
             : mode === "research"
-              ? "You are KOPLI AI, created and owned by Pranesh KK. Be precise, distinguish facts from uncertainty, and do not invent sources."
-              : "You are KOPLI AI, created and owned by Pranesh KK. Be clear, accurate, and helpful.";
+              ? "You are KOPLI AI. Be precise, distinguish facts from uncertainty, and do not invent sources."
+              : "You are KOPLI AI. Be clear, accurate, and helpful.";
       const protectedSystem = system + "\n\n" + proprietaryDisclosurePolicy;
       let memoryContext = "";
       if (authenticatedUser && prisma) {
@@ -1278,7 +1278,7 @@ async function performSearch(prompt: string): Promise<{ query: string; queries: 
 app.post("/api/search", async (req, res) => {
   const prompt = String(req.body?.query || "").trim();
   if (!prompt) return res.status(400).json({ error: "Search query cannot be empty." });
-  if (!configured(process.env.TAVILY_API_KEY)) return res.status(503).json({ error: "Demo mode: TAVILY_API_KEY is not configured.", sources: [] });
+  if (!configured(process.env.TAVILY_API_KEY)) return res.status(503).json({ error: "Web search is temporarily unavailable. Please try again later.", sources: [] });
   try {
     const searchData = await performSearch(prompt);
     res.json(searchData);
@@ -1724,7 +1724,7 @@ async function generateFile(req: express.Request, res: express.Response) {
     if (format === "pdf") {
       const structured = await generateStructuredContent(prompt, topic, "pdf") as any;
       file = path.join(generated, `${id}.pdf`);
-      const pdf = new PDFDocument({ margin: 50, size: "A4", info: { Title: structured.title || topic, Author: "Pranesh KK - KOPLI AI" } });
+      const pdf = new PDFDocument({ margin: 50, size: "A4", info: { Title: structured.title || topic, Author: "KOPLI AI" } });
       pdf.pipe(fs.createWriteStream(file));
       pdf.fillColor("#1d4ed8").fontSize(26).text(structured.title || topic, { align: "center" }).moveDown(0.5);
       pdf.fillColor("#64748b").fontSize(12).text(structured.subtitle || "Prepared by KOPLI AI", { align: "center" }).moveDown(2);
@@ -1753,7 +1753,7 @@ async function generateFile(req: express.Request, res: express.Response) {
       file = path.join(generated, `${id}.pptx`);
       const pptx = new PptxGenJS();
       pptx.layout = "LAYOUT_WIDE";
-      pptx.author = "Pranesh KK";
+      pptx.author = "KOPLI AI";
       pptx.subject = topic;
       pptx.title = structured.title || topic;
       pptx.company = "KOPLI AI";
@@ -1798,7 +1798,7 @@ async function generateFile(req: express.Request, res: express.Response) {
       }
     }
     const doc = new Document({
-      creator: "Pranesh KK - KOPLI AI",
+      creator: "KOPLI AI",
       title: structured.title || topic,
       sections: [{ properties: {}, headers: { default: new Header({ children: [new Paragraph("KOPLI AI")] }) }, footers: { default: new Footer({ children: [new Paragraph("Prepared by KOPLI AI")] }) }, children: docSections }]
     });
