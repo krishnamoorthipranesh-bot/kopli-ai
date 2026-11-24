@@ -1429,9 +1429,9 @@ app.post("/api/images/generate", async (req, res) => {
     try {
       const completion = await groq.chat.completions.create({
         model: aiConfig.groqModel,
-        temperature: 0.35,
+        temperature: 0.2,
         messages: [
-          { role: "system", content: "Improve this image prompt for FLUX image generation. Preserve the user's exact subject, requested details, text, and composition. Add useful visual detail only. Return only the final prompt, under 1,800 characters." },
+          { role: "system", content: "You are a professional visual art director preparing a precise prompt for FLUX. Preserve the exact requested subject, identity, number of people or objects, actions, setting, era, clothing, colors, camera angle, composition, and every user-specified detail. Do not replace, omit, invent, or contradict any named subject or required element. Resolve ambiguity conservatively; do not add extra people, objects, logos, captions, watermarks, or text. Specify a coherent foreground, midground, and background; realistic anatomy and object geometry; consistent lighting; natural proportions; accurate materials; and clean edges. If the user requests exact text, quote it verbatim and make it prominent; do not paraphrase. For photorealism, specify natural skin texture, believable hands, correct perspective, and physically plausible lighting. Return one concise, highly specific prompt only, under 1,800 characters." },
           { role: "user", content: prompt }
         ]
       });
@@ -1628,10 +1628,10 @@ function generationError(statusCode: number, message: string) {
 async function generateStructuredContent(prompt: string, topic: string, format: "pptx" | "docx" | "pdf" | "xlsx", slideCount?: number) {
   if (!groq) throw generationError(503, "AI file generation is temporarily unavailable. Please try again later.");
   const systemPrompt = format === "pptx"
-    ? `Create a professional presentation in valid JSON. Return only JSON with keys title, subtitle, slides. slides must contain title, bullets (4-6 short strings), layout ("title","content","comparison","diagram","conclusion"). Create exactly ${slideCount || 10} non-repeating slides, including a title slide and conclusion.`
+    ? `Create a factually careful, polished presentation in valid JSON. Return only JSON with keys title, subtitle, slides. Create exactly ${slideCount || 10} distinct, logically ordered slides including a title slide, clear learning progression, practical/example slide where relevant, and conclusion. Each slide must have title, 4-6 concise but meaningful bullets, and layout ("title","content","comparison","diagram","conclusion"). Do not repeat ideas or pad slides. Use only reliable, well-established facts; do not invent statistics, quotations, citations, studies, dates, or named sources. Distinguish uncertainty. Make bullets specific, useful, readable, and appropriate for the requested audience. For technical topics, preserve correct terminology, formulas, units, and steps. For diagrams, describe a coherent process or relationship in bullets rather than inventing unsupported details.`
     : format === "xlsx"
-      ? "Create a useful spreadsheet from the request. Return only valid JSON with title, columns (an array of 2-12 short column labels), and rows (an array of up to 100 arrays of cell values, each matching the columns). Include realistic, relevant data only when the user requested examples or a sample; otherwise use only information supported by the request."
-      : "Create professional document content in valid JSON. Return only JSON with keys title, subtitle, sections. sections contain heading and paragraphs (string array). Include a clear introduction, detailed relevant sections, applications or practical guidance where useful, and a concise conclusion. Do not invent citations or references.";
+      ? "Create an accurate, usable spreadsheet. Return only valid JSON with title, columns (2-12 clear column labels), and rows (up to 100 arrays matching the exact column count). Preserve all user-provided values, units, dates, names, and formulas exactly. Do not fabricate real-world data; use clearly labeled sample data only when the user asks for examples. Keep types consistent within columns, avoid duplicate rows, include totals only when they can be calculated from supplied data, and do not silently estimate missing values. Use concise headers and logical row order."
+      : "Create a complete, accurate, professionally structured document in valid JSON with title, subtitle, and sections. Each section has a clear heading and substantive paragraphs. Follow the requested audience, scope, length, and format. Include a concise introduction, logically ordered sections, practical examples or steps where useful, and a clear conclusion. Preserve user-provided facts, figures, names, units, and dates exactly. Do not fabricate statistics, sources, quotations, references, or legal, medical, or technical claims. State uncertainty and assumptions explicitly; do not invent missing critical facts. Avoid repetition, filler, generic padding, and contradictory sections. Use precise terminology and actionable detail.";
   let raw = "";
   try {
     const response = await groq.chat.completions.create({
@@ -1989,3 +1989,4 @@ if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
     void initializeDatabase();
   });
 }
+

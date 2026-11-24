@@ -1336,6 +1336,10 @@ function App() {
 
   function chooseSection(next: Section) {
     setChatActionsOpen(false);
+    setComposerModeOpen(false);
+    setAttachmentMenuOpen(false);
+    setHeaderModeOpen(false);
+    setProfileMenuOpen(false);
     setSection(next);
     setSidebarOpen(false);
     setSettingsDetail("");
@@ -1382,9 +1386,9 @@ function App() {
         </button>
       </aside>
 
-      <main className="main">
+      <main className="main" data-section={section} data-sidebar-open={sidebarOpen ? "true" : "false"}>
         <div className="chat-floating-controls" aria-label="Chat controls">
-          <button className="icon-button floating-menu-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} title="Menu" onClick={() => { setSidebarOpen(value => !value); setChatActionsOpen(false); }}><Menu size={20} /></button>
+          <button className="icon-button floating-menu-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} title="Menu" onClick={() => { setSidebarOpen(value => !value); setChatActionsOpen(false); setComposerModeOpen(false); setAttachmentMenuOpen(false); setHeaderModeOpen(false); }}><Menu size={20} /></button>
           {section === "Chat" && !sidebarOpen && <div className="chat-floating-actions">
             <button className="floating-new-chat" type="button" onClick={() => { setChatLocked(false); newChat(); }}><Plus size={17} /><span>New chat</span></button>
             <div className="chat-actions-wrap">
