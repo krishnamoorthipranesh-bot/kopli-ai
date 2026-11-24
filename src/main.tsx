@@ -38,6 +38,9 @@ interface ChatMessage {
   sources?: Source[];
   attachments?: Array<{ fileName: string; mimeType: string; previewUrl?: string }>;
   streaming?: boolean;
+  generationType?: "image" | "document";
+  progress?: number;
+  progressLabel?: string;
 }
 
 interface Conversation {
@@ -217,6 +220,18 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong. Please try again.";
 }
 
+function detectCreationIntent(prompt: string): { type: "image" | "document"; format?: "docx" | "pdf" | "pptx" | "xlsx" } | null {
+  const text = prompt.trim();
+  const action = /\\b(create|generate|make|build|prepare|design|draw|write|draft)\\b/i;
+  if (!action.test(text)) return null;
+  if (/\\b(image|picture|photo|illustration|artwork|wallpaper)\\b/i.test(text)) return { type: "image" };
+  if (/\\b(power\\s*point|powerpoint|pptx?|slides?|slide deck|presentation)\\b/i.test(text)) return { type: "document", format: "pptx" };
+  if (/\\b(pdf)\\b/i.test(text)) return { type: "document", format: "pdf" };
+  if (/\\b(excel|spreadsheet|workbook|xlsx?)\\b/i.test(text)) return { type: "document", format: "xlsx" };
+  if (/\\b(word|docx|word document|document|report|assignment|project report|resume|cv)\\b/i.test(text)) return { type: "document", format: "docx" };
+  return null;
+}
+
 const modes: Array<{ id: Mode; label: string; detail: string; icon: IconComponent }> = [
   { id: "fast", label: "Fast", detail: "Quick response", icon: Zap },
   { id: "smart", label: "Smart", detail: "Balanced assistant", icon: Sparkles },
@@ -254,7 +269,12 @@ function MessageView({
         <div className="message-content">
           {message.content
             ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-            : <div className="thinking-state" role="status"><span className="thinking-orb"><img className="thinking-logo" src="/logo.png" alt="" /></span><span className="thinking-wave"><i /><i /><i /></span><span>Thinking</span></div>}
+            : <div className="thinking-state" role="status"><span className="thinking-orb" aria-hidden="true" /><span className="thinking-wave"><i /><i /><i /></span><span>Thinking</span></div>}
+          {message.generationType && message.streaming && <div className="generation-card" role="status" aria-live="polite">
+            <div className="generation-card-heading"><span className="generation-card-icon">{message.generationType === "image" ? <ImageIcon size={17} /> : <FileText size={17} />}</span><span>{message.progressLabel || (message.generationType === "image" ? "Creating your image" : "Creating your document")}</span><strong>{message.progress ?? 8}%</strong></div>
+            <div className="generation-progress-track"><span style={{ width: `${message.progress ?? 8}%` }} /></div>
+            <div className="generation-card-footer"><span>Preparing</span><span>Generating</span><span>Finishing</span></div>
+          </div>}
           {!!message.sources?.length && <div className="sources" aria-label="Sources">
             {message.sources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">[{index + 1}] {source.title || source.url}</a>)}
           </div>}
@@ -346,7 +366,7 @@ function App() {
   const [toolStyle, setToolStyle] = useState("");
   const [toolAspect, setToolAspect] = useState("1:1");
   const [toolImageFormat, setToolImageFormat] = useState("png");
-  const [toolProviders, setToolProviders] = useState<{ groq?: boolean; stability?: boolean } | null>(null);
+  const [toolProviders, setToolProviders] = useState<{ groq?: boolean; cloudflareAi?: boolean } | null>(null);
   const [imageHistory, setImageHistory] = useState<Array<{ prompt: string; previewUrl: string; fileName: string }>>([]);
   const [toolBusy, setToolBusy] = useState(false);
   const [voiceActive, setVoiceActive] = useState(false);
@@ -798,6 +818,7 @@ function App() {
     if ((!text && !uploadedFiles.length) || streaming || streamingRef.current || uploadBusy) return;
     let submittedText = text || "Please review the attached file.";
     const files = uploadedFiles;
+    const creationIntent = files.length === 0 ? detectCreationIntent(text) : null;
     stickToBottomRef.current = true;
     setShowScrollToLatest(false);
     setPrompt("");
@@ -818,6 +839,59 @@ function App() {
     const requestTimeout = window.setTimeout(() => controller.abort(), 120000);
     try {
       await requestWithRetry<{ status: string }>("/health", 2, controller.signal);
+      if (creationIntent) {
+        let progress = 8;
+        const progressLabel = creationIntent.type === "image" ? "Creating your image" : "Building your document";
+        setMessages(previous => previous.map(item => item.id === assistantId
+          ? { ...item, generationType: creationIntent.type, progress, progressLabel, streaming: true }
+          : item));
+        const progressTimer = window.setInterval(() => {
+          progress = Math.min(92, progress + (progress < 45 ? 5 : progress < 75 ? 3 : 1));
+          setMessages(previous => previous.map(item => item.id === assistantId
+            ? { ...item, progress, progressLabel: progress < 35 ? "Preparing your request" : progress < 82 ? (creationIntent.type === "image" ? "Generating image details" : "Writing and formatting content") : "Finishing your file" }
+            : item));
+        }, 900);
+        try {
+          let assistantContent = "";
+          let generatedAttachments: ChatMessage["attachments"] = [];
+          if (creationIntent.type === "image") {
+            const result = await request<{ id: string; url: string; fileName: string; mimeType: string; imageData: string }>(
+              "/api/images/generate",
+              jsonRequest("POST", { prompt: text, includePreview: true }),
+              150000
+            );
+            const previewUrl = `data:${result.mimeType};base64,${result.imageData}`;
+            assistantContent = `Your image is ready. [Open or download the full image]( ${result.url} )`;
+            generatedAttachments = [{ fileName: result.fileName, mimeType: result.mimeType, previewUrl }];
+            setImageHistory(previous => [{ prompt: text, previewUrl, fileName: result.fileName }, ...previous].slice(0, 5));
+          } else {
+            const format = creationIntent.format || "docx";
+            const endpoint = format === "pdf" ? "/api/pdf/generate" : format === "pptx" ? "/api/presentations/generate" : "/api/documents/generate";
+            const result = await request<{ id: string; url: string; fileName: string; mimeType: string; format: string }>(
+              endpoint,
+              jsonRequest("POST", { content: text, format, includeContent: false }),
+              150000
+            );
+            assistantContent = `Your ${format.toUpperCase()} file is ready.\n\n[Download ${result.fileName}](${result.url})`;
+          }
+          await request(`/api/conversations/${encodeURIComponent(conversationId)}/artifacts`, jsonRequest("POST", {
+            userMessage: text,
+            assistantMessage: assistantContent,
+            title: text.slice(0, 60),
+            mode
+          })).catch(error => { setNotice(`File created, but chat history could not be saved: ${errorText(error)}`); });
+          setMessages(previous => previous.map(item => item.id === assistantId
+            ? { ...item, content: assistantContent, attachments: generatedAttachments, progress: 100, progressLabel: "Complete", streaming: false }
+            : item));
+          if (user) {
+            void loadConversations();
+            void loadLibrary();
+          }
+        } finally {
+          window.clearInterval(progressTimer);
+        }
+        return;
+      }
       for (const file of files) {
         if (file.mimeType.startsWith("image/")) continue;
         const analysis = await request<{ text: string; truncated: boolean }>(
@@ -1225,7 +1299,7 @@ function App() {
   useEffect(() => {
     if (section !== "Explore") return;
     let active = true;
-    void request<{ groq?: boolean; stability?: boolean }>("/api/status").then(status => { if (active) setToolProviders(status); }).catch(error => { if (active) setNotice(errorText(error)); });
+    void request<{ groq?: boolean; cloudflareAi?: boolean }>("/api/status").then(status => { if (active) setToolProviders(status); }).catch(error => { if (active) setNotice(errorText(error)); });
     return () => { active = false; };
   }, [section]);
 
@@ -1405,9 +1479,9 @@ function App() {
           </div>
           <div className="settings-card modern explore-workspace" aria-label={`${toolType} tool`}>
             {!user && <div className="explore-provider-note"><strong>Sign in to create and download files</strong><span>Generated files are private to your account.</span><button type="button" onClick={() => openAccountAuth()}>Sign in</button></div>}
-            {user && toolProviders && ((toolType === "image" && !toolProviders.stability) || (toolType !== "image" && !toolProviders.groq)) && <div className="explore-provider-note" role="status">
+            {user && toolProviders && ((toolType === "image" && !toolProviders.cloudflareAi) || (toolType !== "image" && !toolProviders.groq)) && <div className="explore-provider-note" role="status">
               <strong>{toolType === "image" ? "Image generation needs provider setup" : "AI file generation needs provider setup"}</strong>
-              <span>{toolType === "image" ? "Configure STABILITY_API_KEY in the existing service to enable image generation." : "Configure GROQ_API_KEY in the existing service to enable document generation."}</span>
+              <span>{toolType === "image" ? "Configure CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in Render to enable image generation." : "Configure GROQ_API_KEY in the existing service to enable document generation."}</span>
             </div>}
             <div className="explore-form-heading"><div><span className="eyebrow">KOPLI AI TOOL</span><h2>{({image:"Image generation",docx:"Documents",pdf:"PDF reports",pptx:"Presentations",xlsx:"Spreadsheets"})[toolType]}</h2></div>{toolResult && <button type="button" className="explore-text-action" onClick={() => { setToolResult(null); setToolPreview(false); }}>Clear result</button>}</div>
             <form onSubmit={event => void generateContent(event)}>
@@ -1420,7 +1494,7 @@ function App() {
               <label className="explore-field" htmlFor="tool-prompt"><span>{toolType === "image" ? "Describe the image" : "What should KOPLI AI create?"}</span>
                 <textarea id="tool-prompt" className="chat-search" value={toolPrompt} onChange={event => setToolPrompt(event.target.value)} maxLength={10000} placeholder={toolType === "image" ? "Describe the subject, composition, lighting, and mood…" : "Describe the content, audience, key points, and any details to include…"} />
               </label>
-              <div className="explore-form-footer"><span>{toolPrompt.length.toLocaleString()} / 10,000</span><button className="auth-submit" type="submit" disabled={!user || toolBusy || !toolPrompt.trim() || (toolProviders ? toolType === "image" ? !toolProviders.stability : !toolProviders.groq : false)}>{toolBusy ? "Creating…" : toolType === "image" && toolResult ? "Regenerate image" : `Create ${toolType.toUpperCase()}`}</button></div>
+              <div className="explore-form-footer"><span>{toolPrompt.length.toLocaleString()} / 10,000</span><button className="auth-submit" type="submit" disabled={!user || toolBusy || !toolPrompt.trim() || (toolProviders ? toolType === "image" ? !toolProviders.cloudflareAi : !toolProviders.groq : false)}>{toolBusy ? "Creating…" : toolType === "image" && toolResult ? "Regenerate image" : `Create ${toolType.toUpperCase()}`}</button></div>
             </form>
             {toolBusy && <p className="explore-status" role="status">KOPLI AI is creating your {toolType === "image" ? "image" : toolType === "docx" ? "document draft" : toolType.toUpperCase()}…</p>}
             {toolResult && <div className="generated-image-card explore-result">
