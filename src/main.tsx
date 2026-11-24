@@ -3,10 +3,10 @@ import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  ArrowLeft, Bell, Brain, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Code2,
+  ArrowLeft, Brain, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Code2,
   Copy, Download, Eye, EyeOff, FileText, Files, Globe2, Image as ImageIcon, Images, Library,
-  LogIn, LogOut, Menu, Mic, Moon, CircleHelp, MoreHorizontal, Plus, Search,
-  Send, Settings, Shield, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
+  LogIn, LogOut, Menu, Mic, CircleHelp, MoreHorizontal, Plus, Search,
+  Send, Settings, Sparkles, ThumbsDown, ThumbsUp, Trash2,
   UserRound, Volume2, X, Zap
 } from "lucide-react";
 import "./styles.css";
@@ -14,7 +14,7 @@ import "./theme.css";
 import "./chat-theme.css";
 
 type Mode = "fast" | "smart" | "reasoning" | "coding" | "research" | "vision" | "study";
-type Section = "Chat" | "Search" | "Explore" | "Library" | "Settings" | "Admin";
+type Section = "Chat" | "Search" | "Explore" | "Library" | "Settings";
 type Rating = "helpful" | "not_helpful";
 type IconComponent = typeof Sparkles;
 
@@ -318,7 +318,7 @@ function App() {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [composerModeOpen, setComposerModeOpen] = useState(false);
   const [dark, setDark] = useState(() => {
-    try { return localStorage.getItem("kopli.theme") !== "light"; }
+    try { return localStorage.getItem("kopli.theme") === "dark"; }
     catch (error) { console.error("Could not read theme preference:", error); return false; }
   });
   const [reduceEffects, setReduceEffects] = useState(() => {
@@ -370,9 +370,6 @@ function App() {
   const [toolBusy, setToolBusy] = useState(false);
   const [voiceActive, setVoiceActive] = useState(false);
   const [speaking, setSpeaking] = useState(false);
-  const [adminStatus, setAdminStatus] = useState<Record<string, boolean> | null>(null);
-  const [adminUsers, setAdminUsers] = useState<Array<{ id: string; email: string; name: string | null; role: string; createdAt: string }>>([]);
-  const [adminBusy, setAdminBusy] = useState(false);
   const [settingsDetail, setSettingsDetail] = useState("");
   const [settingsSearch, setSettingsSearch] = useState("");
   const appRootRef = useRef<HTMLDivElement>(null);
@@ -1302,20 +1299,6 @@ function App() {
     return () => { active = false; };
   }, [section]);
 
-  async function loadAdmin() {
-    setSection("Admin");
-    setAdminBusy(true);
-    try {
-      const [statusRes, usersRes] = await Promise.all([
-        request<{ providerStatus: Record<string, boolean> }>("/api/admin/status"),
-        request<{ users: typeof adminUsers }>("/api/admin/users").catch(() => ({ users: [] }))
-      ]);
-      setAdminStatus(statusRes.providerStatus);
-      setAdminUsers(usersRes.users || []);
-    }
-    catch (error) { setNotice(errorText(error)); }
-    finally { setAdminBusy(false); }
-  }
 
   function chooseSection(next: Section) {
     setSection(next);
@@ -1366,21 +1349,19 @@ function App() {
       </aside>
 
       <main className="main">
-        <header className="topbar">
+        <header className="topbar topbar-minimal">
           <button className={`icon-button ${mobileViewport ? "mobile-menu" : "sidebar-toggle"}`} aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"} onClick={() => setSidebarOpen(value => !value)}><Menu size={19} /></button>
-          <div className="header-context"><span>Workspace</span><strong>{({Chat:"My Conversations",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[section]}</strong></div>
-          <div className="top-actions">
-            <button className="icon-button" aria-label="Search" title="Search" onClick={() => chooseSection("Search")}><Search size={17} /></button>
-            <button className="icon-button notification-button" aria-label="Notifications" title="Notifications" onClick={() => setNotice("You are all caught up.")}><Bell size={17} /><span /></button>
-            <button className="icon-button" aria-label={dark ? "Use light theme" : "Use dark theme"} title="Toggle theme" onClick={() => setDark(value => !value)}>{dark ? <Sun size={17} /> : <Moon size={17} />}</button>
-            <button className="icon-button" aria-label="Help and support" title="Help and support" onClick={() => chooseSection("Settings")}><CircleHelp size={17} /></button>
-            {user && <div className="profile-menu-wrap"><button className="header-avatar" aria-label={`Account menu for ${user.email}`} aria-expanded={profileMenuOpen} onClick={() => setProfileMenuOpen(value => !value)}>{(user.name || user.email).slice(0,2).toUpperCase()}</button>
-              {profileMenuOpen && <div className="profile-dropdown">
+          <div className="top-actions top-actions-minimal">
+            <button className="icon-button" aria-label="Search" title="Search" onClick={() => chooseSection("Search")}><Search size={18} /></button>
+            <div className="profile-menu-wrap">
+              <button className="header-avatar" aria-label={user ? `Account menu for ${user.email}` : "Sign in"} aria-expanded={profileMenuOpen} onClick={() => user ? setProfileMenuOpen(value => !value) : openAccountAuth()}>{user ? (user.name || user.email).slice(0,2).toUpperCase() : <UserRound size={18} />}</button>
+              {user && profileMenuOpen && <div className="profile-dropdown">
                 <div className="profile-dropdown-account"><span className="avatar"><UserRound size={16} /></span><span><strong>KOPLI AI ACCOUNT</strong><span>{user.email}</span></span></div>
                 <button onClick={() => { chooseSection("Settings"); setProfileMenuOpen(false); }}><UserRound size={16}/><span>Account settings</span></button>
                 <button onClick={() => { chooseSection("Settings"); setProfileMenuOpen(false); }}><Settings size={16}/><span>Preferences</span></button>
                 <button className="profile-logout" onClick={() => void signOut()}><LogOut size={16}/><span>Log out</span></button>
-              </div>}</div>}
+              </div>}
+            </div>
           </div>
         </header>
 
@@ -1555,20 +1536,6 @@ function App() {
             {settingsSearch && <div className="settings-search-results" role="listbox">{settingsLinks.map(item => <button key={item} onClick={() => { setSettingsDetail(item); setSettingsSearch(""); }}>{item}</button>)}{!settingsLinks.length && <span>No matching settings.</span>}</div>}
           </div>
         </section>}
-
-        {section === "Admin" && <section className="page"><header className="page-heading"><h1>Admin dashboard</h1><p>Provider configuration and user management for this deployment.</p></header>
-          {adminBusy ? <p role="status">Checking admin status…</p> : adminStatus ? <>
-            <div className="settings-card">
-              <h2 style={{ fontSize: "1.1rem", marginBottom: 12 }}>Provider Status</h2>
-              {Object.entries(adminStatus).map(([key, enabled]) => <div className="settings-row" key={key}><div><strong>{key.toUpperCase()}</strong><span>{enabled ? "Configured" : "Not configured"}</span></div><span>{enabled ? "Ready" : "Unavailable"}</span></div>)}
-            </div>
-            {adminUsers.length > 0 && <div className="settings-card" style={{ marginTop: 16 }}>
-              <h2 style={{ fontSize: "1.1rem", marginBottom: 12 }}>Registered Users ({adminUsers.length})</h2>
-              {adminUsers.map(u => <div className="settings-row" key={u.id}><div><strong>{u.name ? `${u.name} (${u.email})` : u.email}</strong><span>Role: {u.role}</span></div><span>{new Date(u.createdAt).toLocaleDateString()}</span></div>)}
-            </div>}
-          </> : <p>Admin status is unavailable.</p>}
-        </section>}
-      </main>
 
       {notice && <div className="feedback-toast" role="status">{notice}</div>}
 

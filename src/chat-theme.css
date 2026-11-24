@@ -726,3 +726,28 @@
   .dark .message.assistant .message-content { font-size: 16px; line-height: 1.72; }
   .message-content p { margin-bottom: 15px; line-height: 1.72; }
 }
+
+
+/* Minimal ChatGPT-inspired top navigation */
+.topbar.topbar-minimal {
+  min-height: 56px;
+  height: 56px;
+  padding: 0 20px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.topbar-minimal .header-context { display: none !important; }
+.top-actions-minimal { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.topbar-minimal .icon-button,
+.topbar-minimal .header-avatar {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  border-radius: 12px;
+}
+.topbar-minimal .icon-button { background: transparent; border: 0; box-shadow: none; }
+.topbar-minimal .icon-button:hover { background: var(--surface); }
+@media (max-width: 767px) {
+  .topbar.topbar-minimal { min-height: 52px; height: 52px; padding: 0 12px; }
+}
