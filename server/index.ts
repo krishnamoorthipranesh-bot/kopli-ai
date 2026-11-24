@@ -373,7 +373,7 @@ const voiceUpload = multer({
   fileFilter: (_req, file, callback) => {
     const mime = file.mimetype.split(";")[0].toLowerCase();
     const accepted = ["audio/webm", "audio/wav", "audio/x-wav", "audio/mp4", "audio/mpeg", "audio/ogg", "audio/aac", "audio/flac", "video/webm"];
-    callback(accepted.includes(mime) ? null : new Error("Unsupported audio format."), accepted.includes(mime));
+    callback(null, accepted.includes(mime));
   }
 });
 
