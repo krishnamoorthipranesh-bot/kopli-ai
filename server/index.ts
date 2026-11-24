@@ -1465,9 +1465,9 @@ app.post("/api/images/generate", async (req, res) => {
   fs.writeFileSync(file, buffer);
   const mimeType = actualFormat === "jpg" ? "image/jpeg" : `image/${actualFormat}`;
   if (prisma) {
-    void prisma.storedFile.create({
+    await prisma.storedFile.create({
       data: { id, userId: user.id, name: `${id}.${actualFormat}`, mimeType, size: buffer.length, path: file, kind: "image" }
-    }).catch(error => console.error("Could not add the generated image to the library.", error));
+    }).catch(error => { console.error("Could not add the generated image to the library.", error); throw error; });
   }
   res.json({
     id,
@@ -1710,7 +1710,7 @@ async function generateFile(req: express.Request, res: express.Response) {
       const file = path.join(generated, `${id}.xlsx`);
       const bytes = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
       fs.writeFileSync(file, bytes);
-      if (prisma) void prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: bytes.length, path: file, kind: "document" } }).catch(error => console.error("Could not add the generated spreadsheet to the library.", error));
+      if (prisma) await prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: bytes.length, path: file, kind: "document" } }).catch(error => { console.error("Could not add the generated spreadsheet to the library.", error); throw error; });
       return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Workbook.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", url: `/api/files/${id}.xlsx`, format: "XLSX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
@@ -1733,7 +1733,7 @@ async function generateFile(req: express.Request, res: express.Response) {
         pdf.on("error", reject);
       });
       const bytes = fs.readFileSync(file);
-      if (prisma) void prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.pdf`, mimeType: "application/pdf", size: bytes.length, path: file, kind: "document" } }).catch(error => console.error("Could not add the generated PDF to the library.", error));
+      if (prisma) await prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.pdf`, mimeType: "application/pdf", size: bytes.length, path: file, kind: "document" } }).catch(error => { console.error("Could not add the generated PDF to the library.", error); throw error; });
       return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Report.pdf`, mimeType: "application/pdf", url: `/api/files/${id}.pdf`, format: "PDF", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
@@ -1774,7 +1774,7 @@ async function generateFile(req: express.Request, res: express.Response) {
       await (pptx as any).writeFile({ fileName: file });
       if (!fs.existsSync(file) || fs.statSync(file).size < 1000) throw new Error("PowerPoint file generation produced an invalid file.");
       const bytes = fs.readFileSync(file);
-      if (prisma) void prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", size: bytes.length, path: file, kind: "document" } }).catch(error => console.error("Could not add the generated presentation to the library.", error));
+      if (prisma) await prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", size: bytes.length, path: file, kind: "document" } }).catch(error => { console.error("Could not add the generated presentation to the library.", error); throw error; });
       return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Presentation.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", url: `/api/files/${id}.pptx`, format: "PPTX", slideCount: slides.length, ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
@@ -1799,7 +1799,7 @@ async function generateFile(req: express.Request, res: express.Response) {
     await Packer.toBuffer(doc).then(buffer => fs.writeFileSync(file, buffer));
     if (!fs.existsSync(file) || fs.statSync(file).size < 1000) throw new Error("Word file generation produced an invalid file.");
     const bytes = fs.readFileSync(file);
-    if (prisma) void prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: bytes.length, path: file, kind: "document" } }).catch(error => console.error("Could not add the generated document to the library.", error));
+    if (prisma) await prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: bytes.length, path: file, kind: "document" } }).catch(error => { console.error("Could not add the generated document to the library.", error); throw error; });
     return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Document.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", url: `/api/files/${id}.docx`, format: "DOCX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
   } catch (error: any) {
     res.status(error?.statusCode || 500).json({ error: error?.message || "Document generation failed." });
