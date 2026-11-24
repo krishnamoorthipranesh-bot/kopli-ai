@@ -320,7 +320,7 @@ function App() {
   const [chatLocked, setChatLocked] = useState(false);
   const [composerModeOpen, setComposerModeOpen] = useState(false);
   const [dark, setDark] = useState(() => {
-    try { return localStorage.getItem("kopli.theme") === "dark"; }
+    try { return localStorage.getItem("kopli.theme.choice") === "dark"; }
     catch (error) { console.error("Could not read theme preference:", error); return false; }
   });
   const [reduceEffects, setReduceEffects] = useState(() => {
@@ -600,7 +600,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    try { localStorage.setItem("kopli.theme", dark ? "dark" : "light"); }
+    try { localStorage.setItem("kopli.theme.choice", dark ? "dark" : "light"); }
     catch (error) { console.error("Could not save theme preference:", error); }
   }, [dark]);
 
@@ -1368,7 +1368,7 @@ function App() {
               {chatActionsOpen && <div className="chat-actions-menu" role="menu" aria-label="Chat options">
                 <button type="button" role="menuitem" onClick={() => void shareCurrentChat()}><Share2 size={17} /><span>Share chat</span></button>
                 <button type="button" role="menuitem" onClick={() => { setChatLocked(value => !value); setChatActionsOpen(false); }}><LockKeyhole size={17} /><span>{chatLocked ? "Unlock chat" : "Lock chat"}</span></button>
-                <button type="button" role="menuitem" onClick={() => { setChatActionsOpen(false); chooseSection("Explore"); }}><Folder size={17} /><span>Projects</span></button>
+                <button type="button" role="menuitem" onClick={() => { setChatActionsOpen(false); chooseSection("Settings"); setSettingsDetail("Data & memory"); }}><Folder size={17} /><span>Projects</span></button>
                 <button type="button" role="menuitem" onClick={() => { setChatActionsOpen(false); fileInputRef.current?.click(); }}><Files size={17} /><span>Upload files</span></button>
               </div>}
             </div>
