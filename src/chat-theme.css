@@ -669,3 +669,27 @@
   .thinking-orb::before { animation: none; }
   .generation-progress-track > span { transition: none; }
 }
+
+
+/* Mobile readability, full-width assistant replies, and single-logo thinking state */
+.message { width:100%; max-width:100%; min-width:0; }
+.message-user-content { min-width:0; width:100%; }
+.message.assistant .message-user-content { width:100%; max-width:100%; }
+.message.assistant .message-content,
+.dark .message.assistant .message-content { width:100%; max-width:100%; min-width:0; box-sizing:border-box; overflow-wrap:anywhere; }
+.message.user .message-content,
+.dark .message.user .message-content { color:#f4f7ff !important; background:linear-gradient(135deg,#26364d,#202b3c) !important; border:1px solid rgba(153,180,220,.3) !important; max-width:min(88%,720px); }
+.message.user .message-content p,
+.dark .message.user .message-content p { color:#f4f7ff !important; }
+.thinking-state { min-height:36px; gap:0; color:var(--text-secondary); }
+.thinking-state .thinking-orb,
+.thinking-state .thinking-wave { display:none !important; }
+.message.streaming .message-avatar::after { opacity:0; animation:none; }
+@media (max-width:767px) {
+  .messages { width:100%; max-width:100%; padding-left:12px; padding-right:12px; }
+  .message { width:100%; max-width:100%; }
+  .message.assistant .message-content,
+  .dark .message.assistant .message-content { width:100%; max-width:100%; padding:4px 0 8px; }
+  .message.user .message-content,
+  .dark .message.user .message-content { max-width:90%; }
+}

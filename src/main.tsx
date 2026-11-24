@@ -269,7 +269,7 @@ function MessageView({
         <div className="message-content">
           {message.content
             ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-            : <div className="thinking-state" role="status"><span className="thinking-orb" aria-hidden="true" /><span className="thinking-wave"><i /><i /><i /></span><span>Thinking</span></div>}
+            : <div className="thinking-state" role="status"><span>Thinking</span></div>}
           {message.generationType && message.streaming && <div className="generation-card" role="status" aria-live="polite">
             <div className="generation-card-heading"><span className="generation-card-icon">{message.generationType === "image" ? <ImageIcon size={17} /> : <FileText size={17} />}</span><span>{message.progressLabel || (message.generationType === "image" ? "Creating your image" : "Creating your document")}</span><strong>{message.progress ?? 8}%</strong></div>
             <div className="generation-progress-track"><span style={{ width: `${message.progress ?? 8}%` }} /></div>
