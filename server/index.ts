@@ -659,7 +659,7 @@ app.get("/api/status", async (_req, res) => {
     groq: configured(process.env.GROQ_API_KEY),
     gemini: configured(process.env.GEMINI_API_KEY),
     tavily: configured(process.env.TAVILY_API_KEY),
-    stability: configured(process.env.STABILITY_API_KEY),
+    cloudflareAi: Boolean(configured(process.env.CLOUDFLARE_ACCOUNT_ID) && configured(process.env.CLOUDFLARE_API_TOKEN)),
     database,
     demo: !configured(process.env.GROQ_API_KEY) && !configured(process.env.GEMINI_API_KEY),
     model: aiConfig.groqModel
@@ -869,7 +869,7 @@ app.get("/api/admin/status", async (req, res) => {
     groq: configured(process.env.GROQ_API_KEY),
     gemini: configured(process.env.GEMINI_API_KEY),
     tavily: configured(process.env.TAVILY_API_KEY),
-    stability: configured(process.env.STABILITY_API_KEY),
+    cloudflareAi: Boolean(configured(process.env.CLOUDFLARE_ACCOUNT_ID) && configured(process.env.CLOUDFLARE_API_TOKEN)),
     database: Boolean(prisma)
   } });
 });
@@ -1334,24 +1334,58 @@ app.post("/api/images/generate", async (req, res) => {
   if (!user) return res.status(401).json({ error: "Sign in to generate images." });
   const prompt = String(req.body?.prompt || "").trim();
   if (!prompt) return res.status(400).json({ error: "Image prompt cannot be empty." });
-  if (prompt.length > 10000) return res.status(400).json({ error: "Image prompts must be 10,000 characters or fewer." });
-  if (!configured(process.env.STABILITY_API_KEY)) return res.status(503).json({ error: "Image generation is not configured. Set up STABILITY_API_KEY in the existing service." });
+  if (prompt.length > 2048) return res.status(400).json({ error: "Image prompts must be 2,048 characters or fewer." });
+
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
+  if (!configured(accountId) || !configured(apiToken)) {
+    return res.status(503).json({ error: "Cloudflare image generation is not configured on the server. The Cloudflare Account ID and Workers AI API token must be set in Render." });
+  }
+
   const aspectRatio = String(req.body?.aspectRatio || "1:1");
   const allowedAspectRatios = new Set(["21:9", "16:9", "3:2", "5:4", "1:1", "4:5", "2:3", "9:16", "9:21"]);
   if (!allowedAspectRatios.has(aspectRatio)) return res.status(400).json({ error: "Choose a supported image aspect ratio." });
   const stylePreset = String(req.body?.stylePreset || "");
   const allowedStylePresets = new Set(["", "enhance", "anime", "photographic", "digital-art", "comic-book", "fantasy-art", "line-art", "analog-film", "neon-punk", "isometric", "low-poly", "origami", "modeling-compound", "cinematic", "3d-model", "pixel-art", "tile-texture"]);
   if (!allowedStylePresets.has(stylePreset)) return res.status(400).json({ error: "Choose a supported image style." });
-  const outputFormat = String(req.body?.outputFormat || "png");
-  if (!new Set(["png", "jpeg", "webp"]).has(outputFormat)) return res.status(400).json({ error: "Choose PNG, JPEG, or WebP output." });
+
+  const styleDescriptions: Record<string, string> = {
+    anime: "anime illustration",
+    photographic: "photorealistic professional photography",
+    "digital-art": "high quality digital artwork",
+    "comic-book": "comic book illustration",
+    "fantasy-art": "fantasy concept art",
+    "line-art": "clean detailed line art",
+    "analog-film": "analog film photography",
+    "neon-punk": "neon punk cyberpunk artwork",
+    isometric: "isometric 3D illustration",
+    "low-poly": "low-poly 3D artwork",
+    origami: "origami paper art",
+    "modeling-compound": "clay modeling art",
+    cinematic: "cinematic film still with dramatic lighting",
+    "3d-model": "polished 3D render",
+    "pixel-art": "pixel art",
+    "tile-texture": "seamless tileable texture"
+  };
+  const ratioDescription: Record<string, string> = {
+    "21:9": "ultra-wide panoramic composition",
+    "16:9": "wide landscape composition",
+    "3:2": "landscape composition",
+    "5:4": "slightly wide composition",
+    "1:1": "square composition",
+    "4:5": "portrait composition",
+    "2:3": "vertical portrait composition",
+    "9:16": "tall vertical composition",
+    "9:21": "ultra-tall vertical composition"
+  };
   let enhancedPrompt = prompt;
   if (groq) {
     try {
       const completion = await groq.chat.completions.create({
         model: aiConfig.groqModel,
-        temperature: 0.4,
+        temperature: 0.35,
         messages: [
-          { role: "system", content: "Enhance the user's image prompt for an accurate educational visual. Preserve every named subject and learning stage. For roadmap, flowchart, infographic or diagram requests, create a clearly labeled technical progression and never substitute roads or unrelated transportation scenes. Return only the improved prompt." },
+          { role: "system", content: "Improve this image prompt for FLUX image generation. Preserve the user's exact subject, requested details, text, and composition. Add useful visual detail only. Return only the final prompt, under 1,800 characters." },
           { role: "user", content: prompt }
         ]
       });
@@ -1360,52 +1394,68 @@ app.post("/api/images/generate", async (req, res) => {
       console.error("Image prompt enhancement failed; using the original prompt.", error);
     }
   }
-  const form = new FormData();
-  form.set("prompt", enhancedPrompt);
-  form.set("aspect_ratio", aspectRatio);
-  form.set("output_format", outputFormat);
-  if (stylePreset) form.set("style_preset", stylePreset);
+  const finalPrompt = [enhancedPrompt, styleDescriptions[stylePreset] || "", ratioDescription[aspectRatio] || ""].filter(Boolean).join(", ").slice(0, 2048);
   let response: Response;
   try {
-    response = await fetch("https://api.stability.ai/v2beta/stable-image/generate/core", {
+    response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
       method: "POST",
-      headers: { Accept: "image/*", Authorization: `Bearer ${process.env.STABILITY_API_KEY}` },
-      body: form
+      headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: finalPrompt, steps: 4 }),
+      signal: AbortSignal.timeout(120000)
     });
   } catch (error) {
-    console.error("Image provider request failed.", error);
-    return res.status(502).json({ error: "Image generation could not reach the provider. Please try again." });
+    console.error("Cloudflare Workers AI image request failed.", error);
+    return res.status(502).json({ error: "Image generation could not reach Cloudflare. Please try again." });
   }
   if (!response.ok) {
-    let detail = `Stability AI returned ${response.status}`;
-    try {
-      const errorBody = await response.text();
-      if (errorBody) detail = `${detail}: ${errorBody.slice(0, 500)}`;
-    } catch (error) {
-      console.error("Could not read the image provider error response.", error);
-    }
-    return res.status(response.status).json({ error: detail });
+    const detail = (await response.text().catch(() => "")).slice(0, 400);
+    console.error("Cloudflare Workers AI returned HTTP", response.status, detail);
+    return res.status(response.status >= 500 ? 502 : response.status).json({
+      error: response.status === 401 || response.status === 403
+        ? "Cloudflare rejected the Workers AI token. Check that the token has Workers AI Read permission and the Account ID is correct."
+        : response.status === 429
+          ? "Cloudflare Workers AI is temporarily rate limited. Please try again later."
+          : `Cloudflare image generation failed (HTTP ${response.status}). Please check the Workers AI account and try again.`
+    });
   }
-  const contentType = response.headers.get("content-type") || "image/png";
-  if (!contentType.startsWith("image/")) return res.status(502).json({ error: "Stability AI did not return image bytes." });
-  const bytes = await response.arrayBuffer();
-  if (!bytes.byteLength) return res.status(502).json({ error: "Stability AI returned an empty image." });
-  const buffer = Buffer.from(bytes);
+
+  let payload: any;
+  try { payload = await response.json(); }
+  catch { return res.status(502).json({ error: "Cloudflare returned an unreadable image response." }); }
+  const imageBase64 = typeof payload?.result?.image === "string"
+    ? payload.result.image
+    : typeof payload?.result === "string"
+      ? payload.result
+      : typeof payload?.image === "string" ? payload.image : "";
+  if (!imageBase64) {
+    console.error("Cloudflare Workers AI response did not contain image bytes.");
+    return res.status(502).json({ error: "Cloudflare did not return an image. Please try again." });
+  }
+  const buffer = Buffer.from(imageBase64, "base64");
   const isPng = buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
   const isJpeg = buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
   const isWebp = buffer.length >= 12 && buffer.subarray(0, 4).toString() === "RIFF" && buffer.subarray(8, 12).toString() === "WEBP";
   const actualFormat = isPng ? "png" : isJpeg ? "jpg" : isWebp ? "webp" : "";
-  if (!actualFormat) return res.status(502).json({ error: "Stability AI returned invalid image bytes." });
+  if (!actualFormat) return res.status(502).json({ error: "Cloudflare returned invalid image bytes." });
+
   const id = crypto.randomUUID();
   const file = path.join(generated, `${id}.${actualFormat}`);
   fs.writeFileSync(file, buffer);
+  const mimeType = actualFormat === "jpg" ? "image/jpeg" : `image/${actualFormat}`;
   if (prisma) {
     void prisma.storedFile.create({
-      data: { id, userId: user.id, name: `${id}.${actualFormat}`, mimeType: `image/${actualFormat === "jpg" ? "jpeg" : actualFormat}`, size: buffer.length, path: file, kind: "image" }
+      data: { id, userId: user.id, name: `${id}.${actualFormat}`, mimeType, size: buffer.length, path: file, kind: "image" }
     }).catch(error => console.error("Could not add the generated image to the library.", error));
   }
-  const mimeType = `image/${actualFormat === "jpg" ? "jpeg" : actualFormat}`;
-  res.json({ id, url: `/api/images/${id}`, prompt: enhancedPrompt, originalPrompt: prompt, mimeType, fileName: `${id}.${actualFormat}`, ...(req.body?.includePreview === true ? { imageData: buffer.toString("base64") } : {}) });
+  res.json({
+    id,
+    url: `/api/images/${id}`,
+    prompt: finalPrompt,
+    originalPrompt: prompt,
+    mimeType,
+    fileName: `KOPLI_AI_${id.slice(0, 8)}.${actualFormat}`,
+    ...(req.body?.includePreview === true ? { imageData: buffer.toString("base64") } : {})
+  });
 });
 
 app.get("/api/images/:imageId", async (req, res) => {
