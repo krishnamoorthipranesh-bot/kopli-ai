@@ -387,6 +387,9 @@ function App() {
   const attachmentMenuRef = useRef<HTMLDivElement>(null);
   const objectUrlsRef = useRef(new Set<string>());
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceStreamRef = useRef<MediaStream | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const stickToBottomRef = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
@@ -651,6 +654,8 @@ function App() {
       if (!(target instanceof Element)) return;
       if (!target.closest(".composer-mode-wrap")) setComposerModeOpen(false);
       if (!target.closest(".attachment-menu-wrap")) setAttachmentMenuOpen(false);
+      if (!target.closest(".header-mode-wrap")) setHeaderModeOpen(false);
+      if (!target.closest(".profile-menu-wrap")) setProfileMenuOpen(false);
       if (!target.closest(".chat-actions-wrap")) setChatActionsOpen(false);
     };
     document.addEventListener("pointerdown", closeMenusOnOutsidePress);
@@ -1210,6 +1215,54 @@ function App() {
     if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }
 
+  async function startRecorderVoiceFallback() {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setNotice("Voice recording is not supported in this browser. Try Chrome and allow microphone access.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+      voiceStreamRef.current = stream;
+      voiceChunksRef.current = [];
+      const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(type => MediaRecorder.isTypeSupported(type));
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = event => { if (event.data.size) voiceChunksRef.current.push(event.data); };
+      recorder.onerror = () => {
+        setNotice("Microphone recording failed. Check microphone permission and try again.");
+        setVoiceActive(false);
+        stream.getTracks().forEach(track => track.stop());
+        voiceStreamRef.current = null;
+        mediaRecorderRef.current = null;
+      };
+      recorder.onstop = async () => {
+        setVoiceActive(false);
+        stream.getTracks().forEach(track => track.stop());
+        voiceStreamRef.current = null;
+        mediaRecorderRef.current = null;
+        const blob = new Blob(voiceChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        voiceChunksRef.current = [];
+        if (!blob.size) { setNotice("No speech was recorded. Please try again."); return; }
+        const form = new FormData();
+        form.append("audio", blob, `kopli-voice-${Date.now()}.webm`);
+        form.append("language", preferences.language || "ta-IN");
+        setNotice("Transcribing your speech…");
+        try {
+          const result = await request<{ text: string }>("/api/voice/transcribe", { method: "POST", body: form }, 90000);
+          if (result.text?.trim()) setPrompt(previous => [previous.trim(), result.text.trim()].filter(Boolean).join(" "));
+          setNotice(result.text?.trim() ? "Voice transcription added to your message." : "No clear speech was detected. Please try again.");
+        } catch (error) { setNotice(errorText(error)); }
+      };
+      recorder.start(500);
+      setVoiceActive(true);
+      setNotice("Listening… tap the microphone again when you finish speaking.");
+    } catch (error) {
+      setNotice(error instanceof Error && error.name === "NotAllowedError"
+        ? "Microphone permission was blocked. Allow microphone access in your browser settings."
+        : "Could not start microphone recording. Check your microphone and try again.");
+    }
+  }
+
   function toggleVoice() {
     if (recognitionRef.current) {
       recognitionRef.current.stop();
@@ -1217,13 +1270,20 @@ function App() {
       setVoiceActive(false);
       return;
     }
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
+      return;
+    }
     const voiceWindow = window as SpeechWindow;
     const Recognition = voiceWindow.SpeechRecognition || voiceWindow.webkitSpeechRecognition;
-    if (!Recognition) { setNotice("Voice input is not supported in this browser."); return; }
+    if (!Recognition) {
+      void startRecorderVoiceFallback();
+      return;
+    }
     const recognition = new Recognition();
     const language = (preferences.language || "ta-IN").toLowerCase();
     const speechLanguage = language === "tanglish" ? "en-IN"
-      : language === "en" ? "ta-IN" : language === "english" || language === "en-in" ? "en-IN"
+      : language === "en" ? "en-IN" : language === "english" || language === "en-in" ? "en-IN"
         : language === "en-us" ? "en-US"
           : language === "hindi" ? "hi-IN"
             : language === "malayalam" ? "ml-IN"
@@ -1233,16 +1293,19 @@ function App() {
     recognition.lang = speechLanguage;
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.onresult = result => setPrompt(Array.from(result.results).map(item => item[0]?.transcript || "").join(""));
+    recognition.onresult = result => setPrompt(previous => {
+      const transcript = Array.from(result.results).map(item => item[0]?.transcript || "").join("").trim();
+      return transcript || previous;
+    });
     recognition.onerror = event => {
-      setNotice(`Voice input failed: ${event.error}.`);
+      setNotice(`Voice input failed: ${event.error}. If your browser blocks speech recognition, use a supported browser or retry.`);
       setVoiceActive(false);
       recognitionRef.current = null;
     };
     recognition.onend = () => { setVoiceActive(false); recognitionRef.current = null; };
     recognitionRef.current = recognition;
     try { recognition.start(); setVoiceActive(true); }
-    catch (error) { setNotice(errorText(error)); recognitionRef.current = null; }
+    catch (error) { recognitionRef.current = null; void startRecorderVoiceFallback(); }
   }
 
   async function runWebSearch(event: FormEvent) {
@@ -1558,7 +1621,7 @@ function App() {
             {settingsDetail === "Personalization" && <div className="settings-card-neutral">
               <div className="settings-neutral-row"><div><strong>Improve responses</strong><span>Remember corrections and preferences for this account</span></div><button className={`switch ${preferences.learning ? "toggle-active" : ""}`} aria-label="Toggle response personalization" aria-pressed={preferences.learning} onClick={() => void updatePreferences({ learning: !preferences.learning })}><span className={preferences.learning ? "on" : ""} /></button></div>
               <div className="settings-neutral-row"><div><strong>Use past conversations</strong><span>Allow KOPLI AI to recall relevant chats and preferences naturally</span></div><button className={`switch ${preferences.crossChat ? "toggle-active" : ""}`} aria-label="Toggle cross-chat memory" aria-pressed={preferences.crossChat} onClick={() => void updatePreferences({ crossChat: !preferences.crossChat })}><span className={preferences.crossChat ? "on" : ""} /></button></div>
-              <div className="settings-neutral-row"><div><strong>Voice and reply language</strong><span>Choose the language used to recognize your speech and guide replies</span></div><select className="chat-search" aria-label="Voice and reply language" value={preferences.language === "en" ? "ta-IN" : preferences.language || "ta-IN"} onChange={event => void updatePreferences({ language: event.target.value })}><option value="ta-IN">Tamil</option><option value="tanglish">Tanglish</option><option value="en-IN">English (India)</option><option value="en-US">English (US)</option><option value="hi-IN">Hindi</option><option value="ml-IN">Malayalam</option><option value="te-IN">Telugu</option><option value="kn-IN">Kannada</option></select></div>
+              <div className="settings-neutral-row"><div><strong>Voice and reply language</strong><span>Choose the language used to recognize your speech and guide replies</span></div><select className="chat-search" aria-label="Voice and reply language" value={preferences.language === "en" ? "en-IN" : preferences.language || "ta-IN"} onChange={event => void updatePreferences({ language: event.target.value })}><option value="ta-IN">Tamil</option><option value="tanglish">Tanglish</option><option value="en-IN">English (India)</option><option value="en-US">English (US)</option><option value="hi-IN">Hindi</option><option value="ml-IN">Malayalam</option><option value="te-IN">Telugu</option><option value="kn-IN">Kannada</option></select></div>
             </div>}
             {settingsDetail === "Data & memory" && <div className="settings-card-neutral">
               <div className="settings-neutral-row"><div><strong>Saved memory</strong><span>Review or remove saved preferences and summaries</span></div><button className="settings-action" onClick={() => void openMemoryManager()}>Manage</button></div>
