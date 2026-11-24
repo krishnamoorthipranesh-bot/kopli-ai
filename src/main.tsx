@@ -6,7 +6,7 @@ import {
   ArrowLeft, Brain, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Code2,
   Copy, Download, Eye, EyeOff, FileText, Files, Globe2, Image as ImageIcon, Images, Library,
   LogIn, LogOut, Menu, Mic, CircleHelp, MoreHorizontal, Plus, Search,
-  Send, Settings, Sparkles, ThumbsDown, ThumbsUp, Trash2,
+  Send, Settings, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
   UserRound, Volume2, X, Zap
 } from "lucide-react";
 import "./styles.css";
