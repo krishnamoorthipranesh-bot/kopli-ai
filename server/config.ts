@@ -4,6 +4,6 @@ export const aiConfig = {
   groqVisionModel: process.env.GROQ_VISION_MODEL || "qwen/qwen3.8-27b",
   groqConfigured: configured(process.env.GROQ_API_KEY),
   tavilyConfigured: configured(process.env.TAVILY_API_KEY),
-  stabilityConfigured: configured(process.env.STABILITY_API_KEY)
+  cloudflareAiConfigured: Boolean(configured(process.env.CLOUDFLARE_ACCOUNT_ID) && configured(process.env.CLOUDFLARE_API_TOKEN))
 };
 export const securityConfig = { isProduction: process.env.NODE_ENV === "production", sessionSecret: process.env.SESSION_SECRET || process.env.KOPLI_ADMIN_SECRET };
