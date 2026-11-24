@@ -1532,6 +1532,8 @@ function App() {
           </div>
         </section>}
 
+      </main>
+
       {notice && <div className="feedback-toast" role="status">{notice}</div>}
 
       {authOpen && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeAuthDialog(); }}>
