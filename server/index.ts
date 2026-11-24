@@ -932,7 +932,7 @@ app.post("/api/chat", async (req, res) => {
       item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string"
     ).slice(-20).map(item => ({ role: item.role, content: item.content.slice(0, 12000) }))
     : [];
-  let preference: { learning: boolean; crossChat: boolean; language: string } | null = null;
+  let preference: { learning: boolean; crossChat: boolean; language: string; personality: string } | null = null;
   if (authenticatedUser && prisma) {
     try {
       preference = await prisma.userPreference.upsert({
@@ -1027,10 +1027,27 @@ app.post("/api/chat", async (req, res) => {
             : mode === "research"
               ? "You are KOPLI AI. Be precise, distinguish facts from uncertainty, and do not invent sources."
               : "You are KOPLI AI. Be clear, accurate, and helpful.";
-      const protectedSystem = system + "\n\n" + proprietaryDisclosurePolicy;
+      const languagePreference = (preference?.language || "").toLowerCase();
+      const languageGuidance = languagePreference === "ta-in" || languagePreference === "ta" || languagePreference === "tamil"
+        ? "The user's preferred language is Tamil. Reply naturally in Tamil script unless they explicitly ask for another language."
+        : languagePreference === "tanglish"
+          ? "The user's preferred language is Tanglish. Reply in natural spoken Tamil-English mix using Latin letters, matching their wording."
+          : languagePreference === "en-in" || languagePreference === "en" || languagePreference === "english"
+            ? "Prefer natural Indian English, but follow the language the user uses if they switch."
+            : languagePreference === "en-us" ? "Prefer natural US English, but follow the language the user uses if they switch."
+              : languagePreference === "hi-in" ? "Prefer Hindi, but follow the language the user uses if they switch."
+                : languagePreference === "ml-in" ? "Prefer Malayalam, but follow the language the user uses if they switch."
+                  : languagePreference === "te-in" ? "Prefer Telugu, but follow the language the user uses if they switch."
+                    : languagePreference === "kn-in" ? "Prefer Kannada, but follow the language the user uses if they switch."
+                      : "Reply in the same language and script the user uses; understand Tamil, Tanglish, and multilingual messages.";
+      const toneGuidance = "Be emotionally aware and conversational. If the user is playful or joking, respond warmly and playfully; if they are excited, share the enthusiasm; if they are sad, stressed, or vulnerable, be empathetic and gentle; if they are serious, be calm and direct. Match the user's natural level of formality and energy without forcing jokes, exaggerating emotions, or sounding robotic. Keep continuity with the user's established preferences.";
+      const personalityGuidance = preference?.personality && !["smart", "balanced", "adaptive"].includes(preference.personality.toLowerCase())
+        ? `Preferred conversation style: ${preference.personality}. Apply it naturally while still adapting to the user's emotional tone.`
+        : "Use an adaptive, friendly, natural conversational style.";
+      const protectedSystem = [system, proprietaryDisclosurePolicy, languageGuidance, toneGuidance, personalityGuidance].join("\\n\\n");
       let memoryContext = "";
       if (authenticatedUser && prisma) {
-        if (preference?.crossChat && isPastContextQuery(message) && !containsSensitiveSecret(message)) {
+        if (preference?.crossChat && !containsSensitiveSecret(message)) {
               const keywords = memoryKeywords(message).slice(0, 6);
               const [memories, previousConversations] = await Promise.all([
                 prisma.userMemory.findMany({

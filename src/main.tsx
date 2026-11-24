@@ -102,6 +102,7 @@ interface SpeechResultLike {
 
 interface SpeechRecognitionLike {
   lang: string;
+  continuous: boolean;
   interimResults: boolean;
   onresult: ((event: SpeechResultLike) => void) | null;
   onerror: ((event: { error: string }) => void) | null;
@@ -345,7 +346,7 @@ function App() {
   const [streaming, setStreaming] = useState(false);
   const [notice, setNotice] = useState("");
   const [preferences, setPreferences] = useState<Preference>({
-    learning: true, crossChat: true, language: "English", personality: "balanced"
+    learning: true, crossChat: true, language: "ta-IN", personality: "adaptive"
   });
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [memories, setMemories] = useState<SavedMemory[]>([]);
@@ -643,6 +644,18 @@ function App() {
     const timer = window.setTimeout(() => setNotice(""), 6000);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  useEffect(() => {
+    const closeMenusOnOutsidePress = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (!target.closest(".composer-mode-wrap")) setComposerModeOpen(false);
+      if (!target.closest(".attachment-menu-wrap")) setAttachmentMenuOpen(false);
+      if (!target.closest(".chat-actions-wrap")) setChatActionsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeMenusOnOutsidePress);
+    return () => document.removeEventListener("pointerdown", closeMenusOnOutsidePress);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -1208,7 +1221,17 @@ function App() {
     const Recognition = voiceWindow.SpeechRecognition || voiceWindow.webkitSpeechRecognition;
     if (!Recognition) { setNotice("Voice input is not supported in this browser."); return; }
     const recognition = new Recognition();
-    recognition.lang = preferences.language === "tanglish" ? "en-IN" : "en-US";
+    const language = (preferences.language || "ta-IN").toLowerCase();
+    const speechLanguage = language === "tanglish" ? "en-IN"
+      : language === "en" || language === "english" || language === "en-in" ? "en-IN"
+        : language === "en-us" ? "en-US"
+          : language === "hindi" ? "hi-IN"
+            : language === "malayalam" ? "ml-IN"
+              : language === "telugu" ? "te-IN"
+                : language === "kannada" ? "kn-IN"
+                  : language === "ta" || language === "tamil" ? "ta-IN" : language;
+    recognition.lang = speechLanguage;
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.onresult = result => setPrompt(Array.from(result.results).map(item => item[0]?.transcript || "").join(""));
     recognition.onerror = event => {
@@ -1530,7 +1553,8 @@ function App() {
             </div>}
             {settingsDetail === "Personalization" && <div className="settings-card-neutral">
               <div className="settings-neutral-row"><div><strong>Improve responses</strong><span>Remember corrections and preferences for this account</span></div><button className={`switch ${preferences.learning ? "toggle-active" : ""}`} aria-label="Toggle response personalization" aria-pressed={preferences.learning} onClick={() => void updatePreferences({ learning: !preferences.learning })}><span className={preferences.learning ? "on" : ""} /></button></div>
-              <div className="settings-neutral-row"><div><strong>Use past conversations</strong><span>Allow KOPLI AI to recall relevant chats when asked</span></div><button className={`switch ${preferences.crossChat ? "toggle-active" : ""}`} aria-label="Toggle cross-chat memory" aria-pressed={preferences.crossChat} onClick={() => void updatePreferences({ crossChat: !preferences.crossChat })}><span className={preferences.crossChat ? "on" : ""} /></button></div>
+              <div className="settings-neutral-row"><div><strong>Use past conversations</strong><span>Allow KOPLI AI to recall relevant chats and preferences naturally</span></div><button className={`switch ${preferences.crossChat ? "toggle-active" : ""}`} aria-label="Toggle cross-chat memory" aria-pressed={preferences.crossChat} onClick={() => void updatePreferences({ crossChat: !preferences.crossChat })}><span className={preferences.crossChat ? "on" : ""} /></button></div>
+              <div className="settings-neutral-row"><div><strong>Voice and reply language</strong><span>Choose the language used to recognize your speech and guide replies</span></div><select className="chat-search" aria-label="Voice and reply language" value={preferences.language === "en" ? "ta-IN" : preferences.language || "ta-IN"} onChange={event => void updatePreferences({ language: event.target.value })}><option value="ta-IN">Tamil</option><option value="tanglish">Tanglish</option><option value="en-IN">English (India)</option><option value="en-US">English (US)</option><option value="hi-IN">Hindi</option><option value="ml-IN">Malayalam</option><option value="te-IN">Telugu</option><option value="kn-IN">Kannada</option></select></div>
             </div>}
             {settingsDetail === "Data & memory" && <div className="settings-card-neutral">
               <div className="settings-neutral-row"><div><strong>Saved memory</strong><span>Review or remove saved preferences and summaries</span></div><button className="settings-action" onClick={() => void openMemoryManager()}>Manage</button></div>
