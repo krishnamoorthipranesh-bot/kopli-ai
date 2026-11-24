@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://kopli-ai-1.onrender.com/api/:path*"
+    },
+    {
+      "source": "/health",
+      "destination": "https://kopli-ai-1.onrender.com/health"
+    }
+  ]
+}
