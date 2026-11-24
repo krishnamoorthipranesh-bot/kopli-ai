@@ -813,7 +813,7 @@ function App() {
   async function sendMessage(event?: FormEvent) {
     event?.preventDefault();
     const text = prompt.trim();
-    if ((!text && !uploadedFiles.length) || streaming || streamingRef.current || uploadBusy) return;
+    if ((!text && !uploadedFiles.length) || streaming || streamingRef.current || uploadBusy || chatLocked) return;
     let submittedText = text || "Please review the attached file.";
     const files = uploadedFiles;
     const creationIntent = files.length === 0 ? detectCreationIntent(text) : null;
@@ -1406,7 +1406,7 @@ function App() {
               <form className="composer" onSubmit={event => void sendMessage(event)}>
                 <textarea ref={textareaRef} className="composer-input" value={prompt} disabled={streaming || chatLocked} onChange={event => setPrompt(event.target.value)} onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
                   if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); }
-                }} placeholder="Work with KOPLI AI" aria-label="Message KOPLI AI" rows={2} disabled={streaming} />
+                }} placeholder="Work with KOPLI AI" aria-label="Message KOPLI AI" rows={2} />
                 <div className="composer-toolbar">
                   <div className="composer-toolbar-left">
                     <div className="attachment-menu-wrap" ref={attachmentMenuRef}>
@@ -1435,7 +1435,7 @@ function App() {
                     <button className={`composer-button${voiceActive ? " selected" : ""}`} type="button" aria-label={voiceActive ? "Stop voice input" : "Start voice input"} title="Voice input" onClick={toggleVoice}><Mic size={18} /></button>
                     {streaming
                       ? <button className="send-button" type="button" aria-label="Stop response" onClick={() => abortRef.current?.abort()}><X size={18} /></button>
-                      : <button className="send-button" type="submit" disabled={uploadBusy || (!prompt.trim() && !uploadedFiles.length)} aria-label="Send message"><Send size={18} /></button>}
+                      : <button className="send-button" type="submit" disabled={chatLocked || uploadBusy || (!prompt.trim() && !uploadedFiles.length)} aria-label="Send message"><Send size={18} /></button>}
                   </div>
                 </div>
               </form>
