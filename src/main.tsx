@@ -1312,6 +1312,7 @@ function App() {
   }
 
   function chooseSection(next: Section) {
+    setChatActionsOpen(false);
     setSection(next);
     setSidebarOpen(false);
     setSettingsDetail("");
@@ -1360,8 +1361,8 @@ function App() {
 
       <main className="main">
         <div className="chat-floating-controls" aria-label="Chat controls">
-          <button className="icon-button floating-menu-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} title="Menu" onClick={() => setSidebarOpen(value => !value)}><Menu size={20} /></button>
-          {section === "Chat" && <div className="chat-floating-actions">
+          <button className="icon-button floating-menu-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} title="Menu" onClick={() => { setSidebarOpen(value => !value); setChatActionsOpen(false); }}><Menu size={20} /></button>
+          {section === "Chat" && !sidebarOpen && <div className="chat-floating-actions">
             <button className="floating-new-chat" type="button" onClick={() => { setChatLocked(false); newChat(); }}><Plus size={17} /><span>New chat</span></button>
             <div className="chat-actions-wrap">
               <button className="icon-button floating-more-button" type="button" aria-label="Chat options" title="Chat options" aria-expanded={chatActionsOpen} onClick={() => setChatActionsOpen(value => !value)}><MoreHorizontal size={20} /></button>
