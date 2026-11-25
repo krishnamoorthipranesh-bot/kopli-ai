@@ -61,5 +61,6 @@
     "pptxgenjs": {
       "image-size": "npm:image-size-next@1.2.2"
     }
-  }
+  },
+  "packageManager": "npm@10.9.9"
 }
