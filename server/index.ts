@@ -10,13 +10,15 @@ import multer from "multer";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import crypto from "node:crypto";
 import { inflateRawSync } from "node:zlib";
 import Groq from "groq-sdk";
 
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, Header, Footer } from "docx";
 import PDFDocument from "pdfkit";
-import PptxGenJS from "pptxgenjs";
+const require = createRequire(import.meta.url);
+const PptxGenJS = require("pptxgenjs");
 import rateLimit from "express-rate-limit";
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
