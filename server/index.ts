@@ -1798,7 +1798,7 @@ app.post("/api/upload", uploadRateLimit, upload.array("files", 10), async (req, 
 
 app.post("/api/files/:fileId/analyze", fileAnalysisRateLimit, async (req, res) => {
   const user = await currentUser(req);
-  const fileId = path.basename(req.params.fileId);
+  const fileId = path.basename(String(req.params.fileId || ""));
   const storedFile = prisma && databaseReady ? await prisma.storedFile.findUnique({ where: { id: fileId } }) : null;
   if (user && (!storedFile || storedFile.userId !== user.id)) return res.status(404).json({ error: "Uploaded file not found." });
   if (!user && storedFile?.userId) return res.status(404).json({ error: "Uploaded file not found." });
