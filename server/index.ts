@@ -2124,6 +2124,40 @@ app.post("/api/documents/generate", documentRateLimit, requirePersistentFileStor
 app.post("/api/presentations/generate", documentRateLimit, requirePersistentFileStorage, generateFile);
 app.post("/api/pdf/generate", documentRateLimit, requirePersistentFileStorage, generateFile);
 
+app.get("/api/files/:fileName/preview", async (req, res) => {
+  const user = await currentUser(req);
+  if (!user) return res.status(401).json({ error: "Sign in to preview files." });
+  if (!prisma) return res.status(503).json({ error: "File metadata database is unavailable." });
+  const fileName = path.basename(String(req.params.fileName || ""));
+  const record = await prisma.storedFile.findFirst({ where: { name: fileName, userId: user.id } });
+  if (!record) return res.status(404).json({ error: "File not found." });
+  const localPath = [generated, uploads].map(dir => path.join(dir, fileName)).find(candidate => fs.existsSync(candidate));
+  const bytes = await readUserFile(record, localPath);
+  if (!bytes) return res.status(404).json({ error: "File not found." });
+  const extension = path.extname(fileName).toLowerCase();
+  let text = "";
+  try {
+    if (extension === ".docx") {
+      const extracted = await mammoth.extractRawText({ buffer: bytes });
+      text = extracted.value;
+    } else if (extension === ".pptx") {
+      text = extractTextFromZipArchive(bytes);
+    } else if (extension === ".xlsx") {
+      const workbook = XLSX.read(bytes, { type: "buffer" });
+      text = workbook.SheetNames.map(name => `## ${name}\\n${XLSX.utils.sheet_to_csv(workbook.Sheets[name])}`).join("\\n\\n");
+    } else if ([".txt", ".md", ".csv", ".json", ".rtf"].includes(extension)) {
+      text = decodeUploadedText(bytes);
+    } else {
+      return res.status(415).json({ error: "In-app preview is not available for this file type. Download the file to open it." });
+    }
+    if (!text.trim()) return res.status(422).json({ error: "No readable text was found in this document." });
+    return res.json({ fileName, text: text.slice(0, 100000), truncated: text.length > 100000 });
+  } catch (error) {
+    console.error("Document preview extraction failed.", safeErrorCategory(error));
+    return res.status(422).json({ error: "This document could not be previewed. Download it to open the original file." });
+  }
+});
+
 app.get("/api/files/:fileName", async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to access files." });
