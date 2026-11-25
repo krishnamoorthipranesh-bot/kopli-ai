@@ -1073,7 +1073,7 @@ function App() {
       if (files.length) setUploadedFiles(files);
       if (!aborted && text) setPrompt(text);
       setMessages(previous => previous.map(message => message.id === assistantId
-        ? { ...message, content: aborted ? (message.content ? `${message.content}\\n\\n(Response stopped.)` : "Response stopped.") : message.content ? `${message.content}\\n\\n(Response interrupted: ${errorText(error)})` : `Unable to complete the request: ${errorText(error)}`, streaming: false }
+        ? { ...message, content: aborted ? (message.content ? `${message.content}\n\n(Response stopped.)` : "Response stopped.") : message.content ? `${message.content}\n\n(Response interrupted: ${errorText(error)})` : `Unable to complete the request: ${errorText(error)}`, streaming: false }
         : message));
     } finally {
       window.clearTimeout(requestTimeout);
