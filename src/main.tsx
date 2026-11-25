@@ -347,6 +347,7 @@ function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
+  const [pendingVerification, setPendingVerification] = useState(false);
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -505,6 +506,24 @@ function App() {
     } catch {}
     setAuthOpen(true);
   }, [authReady, user]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("verifyToken");
+    if (!token) return;
+    setAuthOpen(true);
+    setAuthStage("account");
+    setRegistering(false);
+    setAuthBusy(true);
+    request<{ message: string }>("/api/auth/verify-email", jsonRequest("POST", { token }))
+      .then(result => {
+        setPendingVerification(false);
+        setAuthMessage(result.message || "Email verified. You can now sign in.");
+        window.history.replaceState({}, "", window.location.pathname);
+      })
+      .catch(error => setAuthError(errorText(error)))
+      .finally(() => setAuthBusy(false));
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1096,8 +1115,25 @@ function App() {
         email: authEmail,
         password: authPassword
       }));
-      if (!result.user) throw new Error("The account service returned an incomplete sign-in response.");
+      if (!result.user) {
+        if (registering && result.message) {
+          setRegistering(false);
+          setPendingVerification(true);
+          setAuthPassword("");
+          setAuthPasswordConfirmation("");
+          setAuthMessage(result.message);
+          try {
+            const delivery = await request<{ message: string }>("/api/auth/resend-verification", jsonRequest("POST", { email: authEmail }));
+            setAuthMessage(delivery.message || "Verification email sent. Check your inbox.");
+          } catch (deliveryError) {
+            setAuthError(errorText(deliveryError));
+          }
+          return;
+        }
+        throw new Error("The account service returned an incomplete sign-in response.");
+      }
       setUser(result.user);
+      setPendingVerification(false);
       try { sessionStorage.removeItem("kopli.auth-choice"); } catch {}
       setActiveId(null);
       setMessages([]);
@@ -1130,6 +1166,20 @@ function App() {
     setAuthPassword("");
     setAuthPasswordConfirmation("");
     setShowAuthPassword(false);
+  }
+
+  async function resendVerificationEmail() {
+    setAuthBusy(true);
+    setAuthError("");
+    setAuthMessage("");
+    try {
+      const result = await request<{ message: string }>("/api/auth/resend-verification", jsonRequest("POST", { email: authEmail }));
+      setAuthMessage(result.message || "If the account needs verification, a link has been sent.");
+    } catch (error) {
+      setAuthError(errorText(error));
+    } finally {
+      setAuthBusy(false);
+    }
   }
 
   async function submitPasswordRecovery(event: FormEvent) {
@@ -1710,7 +1760,7 @@ function App() {
           <button className="dialog-close" aria-label="Close sign in" onClick={closeAuthDialog}><X size={19} /></button>
           <div className="auth-brand">KOPLI <span>AI</span></div>
           <h1 id="auth-title">{authStage === "forgot" ? "Reset your password" : authStage === "reset" ? "Create new password" : registering ? "Create your account" : "Welcome back"}</h1>
-          <p>{authStage === "forgot" ? "Enter your account email. The secure recovery link opens the new-password form directly." : authStage === "reset" ? "Choose a new password for your account." : registering ? "Create an account to sync conversations and files. No email verification is required." : "Sign in to your KOPLI AI account, or continue as a guest."}</p>
+          <p>{authStage === "forgot" ? "Enter your account email. The secure recovery link opens the new-password form directly." : authStage === "reset" ? "Choose a new password for your account." : registering ? "Create an account to sync conversations and files. Verify your email to protect your account." : "Sign in to your KOPLI AI account, or continue as a guest."}</p>
           {authStage === "account" && <form onSubmit={event => void submitAuth(event)}>
             {registering && <label>Name<input autoComplete="name" value={authName} onChange={event => setAuthName(event.target.value)} required maxLength={100} /></label>}
             <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
@@ -1718,6 +1768,7 @@ function App() {
             {registering && <label>Confirm password<input type={showAuthPassword ? "text" : "password"} autoComplete="new-password" value={authPasswordConfirmation} onChange={event => setAuthPasswordConfirmation(event.target.value)} required minLength={12} /></label>}
             {authError && <p className="auth-error" role="alert">{authError}</p>}
             {authMessage && <p className="auth-success" role="status">{authMessage}</p>}
+            {pendingVerification && <button className="auth-mode-toggle" type="button" onClick={() => void resendVerificationEmail()} disabled={authBusy}>Resend verification email</button>}
             <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Please wait…" : registering ? "Create account" : "Sign in"}</button>
           </form>}
           {authStage === "forgot" && <form onSubmit={event => void submitPasswordRecovery(event)}>
