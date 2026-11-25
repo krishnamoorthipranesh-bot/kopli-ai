@@ -2,7 +2,11 @@
   "rewrites": [
     {
       "source": "/health",
-      "destination": "/api/health"
+      "destination": "/api/handler?__originalPath=/health"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "/api/handler?__originalPath=/api/:path*"
     }
   ],
   "installCommand": "npm install --include=dev"
