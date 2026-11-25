@@ -1,0 +1,38 @@
+name: Verify audited dependency lockfile
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/dependency-lock-refresh.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Verify lockfile is in sync
+        run: |
+          npm install --package-lock-only --ignore-scripts --include=dev
+          git diff --exit-code -- package-lock.json
+      - name: Install locked dependencies
+        run: npm ci --include=dev
+      - name: Fail on high or critical vulnerabilities
+        run: npm audit --audit-level=high
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Tests
+        run: npm test
+      - name: Production build
+        run: npm run build
