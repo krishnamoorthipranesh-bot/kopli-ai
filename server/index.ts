@@ -1748,10 +1748,10 @@ app.post("/api/images/edit", imageGenerationRateLimit, imageEditUpload.single("i
     if (!allowedModels.has(model)) return res.status(400).json({ error: "The configured Cloudflare image-edit model is not supported." });
     let response: Response;
     try {
-      response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/${model}`, {
+      response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run`, {
         method: "POST",
         headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, input_image: inputBytes.toString("base64"), output_format: "png" }),
+        body: JSON.stringify({ model, input: { prompt, input_image: inputBytes.toString("base64"), output_format: "png" } }),
         signal: AbortSignal.timeout(120000)
       });
     } catch (error) {
