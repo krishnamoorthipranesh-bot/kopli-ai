@@ -271,12 +271,15 @@ function MessageView({
 }) {
   const isUser = message.role === "user";
   const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null);
+  const [expandedDocument, setExpandedDocument] = useState<{ src: string; title: string } | null>(null);
   useEffect(() => {
-    if (!expandedImage) return;
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setExpandedImage(null); };
+    if (!expandedImage && !expandedDocument) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") { setExpandedImage(null); setExpandedDocument(null); }
+    };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [expandedImage]);
+  }, [expandedImage, expandedDocument]);
   async function downloadImage() {
     if (!expandedImage) return;
     try {
@@ -303,7 +306,20 @@ function MessageView({
             ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
                 img: ({ src, alt }) => src
                   ? <button className="message-image-button" type="button" onClick={() => setExpandedImage({ src, alt: alt || "KOPLI AI image" })} aria-label="Open image full screen"><img src={src} alt={alt || "KOPLI AI image"} loading="lazy" /></button>
-                  : null
+                  : null,
+                a: ({ href, children }) => {
+                  if (!href) return <span>{children}</span>;
+                  const isFile = href.startsWith("/api/files/") || href.includes("/api/files/");
+                  if (isFile) {
+                    const fileName = decodeURIComponent(href.split("/").pop()?.split("?")[0] || "Generated document");
+                    return <button className="message-document-card" type="button" onClick={() => setExpandedDocument({ src: href, title: fileName })}>
+                      <span className="message-document-icon"><FileText size={21} /></span>
+                      <span className="message-document-details"><strong>{fileName}</strong><small>Open document preview</small></span>
+                      <Eye size={18} aria-hidden="true" />
+                    </button>;
+                  }
+                  return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+                }
               }}>{message.content}</ReactMarkdown>
             : <div className="thinking-state" role="status"><span>Thinking</span></div>}
           {message.generationType && message.streaming && <div className="generation-card" role="status" aria-live="polite">
@@ -334,6 +350,20 @@ function MessageView({
           <button type="button" onClick={() => setExpandedImage(null)} aria-label="Close image" title="Close"><X size={19} /></button>
         </div>
         <img className="image-lightbox-image" src={expandedImage.src} alt={expandedImage.alt} onClick={event => event.stopPropagation()} />
+      </div>}
+      {expandedDocument && <div className="document-preview-backdrop" role="dialog" aria-modal="true" aria-label="Document preview" onClick={() => setExpandedDocument(null)}>
+        <section className="document-preview-dialog" onClick={event => event.stopPropagation()}>
+          <header className="document-preview-toolbar">
+            <span><FileText size={19} aria-hidden="true" /><strong title={expandedDocument.title}>{expandedDocument.title}</strong></span>
+            <a href={expandedDocument.src} download><Download size={17} /> Download</a>
+            <button type="button" onClick={() => setExpandedDocument(null)} aria-label="Close document preview"><X size={20} /></button>
+          </header>
+          <div className="document-preview-content">
+            {/\.pdf($|\?)/i.test(expandedDocument.src)
+              ? <iframe title={expandedDocument.title} src={expandedDocument.src} />
+              : <div className="document-preview-fallback"><FileText size={38} /><strong>{expandedDocument.title}</strong><p>This file opens with your device's document viewer. Download it to view or edit the full document.</p><a href={expandedDocument.src} download><Download size={17} /> Download document</a></div>}
+          </div>
+        </section>
       </div>}
     </article>
   );
