@@ -19,6 +19,9 @@ The CI workflow runs:
 - Vitest test suite
 - production build (Prisma client generation, TypeScript build, server bundle, Vite build)
 
+## Dependency audit details
+The successful CI run's npm audit inventory reported 7 high-severity vulnerabilities, 0 critical, 0 moderate, and 0 low. Affected packages include `@prisma/config`, `deepmerge-ts`, `effect`, `prisma`, `image-size`, `pptxgenjs`, and `xlsx`. The Prisma/PptxGenJS fixes cross major versions and `xlsx` has no npm fix. The audit step is explicitly non-blocking; do not interpret the green build as a clean security audit.
+
 ## Not yet verified for this branch
 No passing CI run or Vercel Preview deployment is claimed until GitHub Actions and Vercel report success for this exact branch commit.
 
