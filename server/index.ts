@@ -21,7 +21,7 @@ const require = createRequire(import.meta.url);
 const PptxGenJS = require("pptxgenjs");
 import rateLimit from "express-rate-limit";
 import mammoth from "mammoth";
-import pdfParse from "pdf-parse";
+import pdfParse from "pdf-parse/lib/pdf-parse.js";
 import * as XLSX from "xlsx";
 import { tavily } from "@tavily/core";
 import { PrismaClient } from "@prisma/client";
