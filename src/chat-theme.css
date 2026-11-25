@@ -850,3 +850,134 @@
   .dark .message.assistant .message-content { line-height:1.5 !important; }
   .message-content p { margin-bottom:8px !important; line-height:1.5 !important; }
 }
+
+
+/* Stable two-row composer: text grows above a dedicated, non-overlapping toolbar. */
+.composer {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  gap: 6px !important;
+  min-height: 112px !important;
+  padding: 10px 12px 9px !important;
+}
+.composer .composer-input {
+  display: block !important;
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  height: 52px !important;
+  min-height: 34px !important;
+  max-height: 160px !important;
+  padding: 5px 7px !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+}
+.composer-toolbar {
+  position: relative !important;
+  inset: auto !important;
+  display: flex !important;
+  flex: 0 0 38px !important;
+  width: 100% !important;
+  min-height: 38px !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+}
+.composer-toolbar-left,
+.composer-toolbar-right {
+  display: flex !important;
+  flex: 0 0 auto !important;
+  min-width: 0 !important;
+  align-items: center !important;
+  gap: 5px !important;
+}
+.composer-toolbar-right { margin-left: auto; }
+.composer-mode-wrap { position: relative; min-width: 0; }
+.composer-mode { white-space: nowrap; }
+@media (max-width: 380px) {
+  .composer { padding: 8px !important; gap: 4px !important; }
+  .composer-toolbar-left,.composer-toolbar-right { gap: 2px !important; }
+  .composer .composer-button { width: 32px !important; min-width: 32px !important; flex-basis: 32px !important; }
+  .composer .send-button { width: 34px !important; min-width: 34px !important; flex-basis: 34px !important; }
+  .composer .composer-mode { max-width: 94px !important; padding: 0 4px !important; font-size: 11px !important; }
+}
+
+/* Large, tappable chat images with a full-screen viewer and download controls. */
+.message-image-button {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 10px 0 14px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  text-align: left;
+  cursor: zoom-in;
+}
+.message-image-button img {
+  display: block;
+  width: auto;
+  max-width: min(100%, 760px);
+  max-height: 620px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(120,140,180,.08);
+}
+.message-attachments .message-image-button { margin: 0; }
+.message-attachments .message-image-button img { width: auto; max-width: min(100%, 760px); max-height: 620px; }
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 18px;
+  background: rgba(5,8,14,.96);
+  backdrop-filter: blur(10px);
+}
+.image-lightbox-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  width: min(1100px,100%);
+  min-height: 44px;
+  color: #fff;
+}
+.image-lightbox-toolbar span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.image-lightbox-toolbar button {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border: 1px solid rgba(255,255,255,.22);
+  border-radius: 50%;
+  background: rgba(255,255,255,.1);
+  color: #fff;
+}
+.image-lightbox-image {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(96vw,1100px);
+  max-height: calc(100dvh - 92px);
+  object-fit: contain;
+  border-radius: 10px;
+}
+.sidebar .history-actions,
+.sidebar details[open] > *:not(summary) { display: none !important; }
