@@ -17,14 +17,14 @@ Source-level review of the Vercel/Express API, authentication/session handling, 
 ## Findings and limitations
 - The production/preview Vercel environment-variable inventory did not contain `SUPABASE_SERVICE_ROLE_KEY`. Persistent file storage was therefore not verified. The current audit branch changes upload and generation paths to fail closed instead of treating Vercel temporary storage as durable.
 - Existing file metadata contains local and `/tmp` paths. Some files may no longer exist after serverless instance recycling; no destructive cleanup or migration was performed.
-- Prior Supabase advisor review reported RLS enabled on existing tables but no policies. Server-side Prisma uses the database connection directly; the Data API exposure and intended access model must be confirmed before adding policies.
+- Supabase public tables retain RLS with no client policies. Existing table, sequence, and function privileges were revoked from anon/authenticated; default privileges for future objects created by postgres were also tightened. Server-side Prisma continues to use the database connection directly.
 - CI previously used a personal access token for checkout. The audit branch removes that dependency and requests only repository read permission.
-- The dependency audit previously reported high-severity transitive advisories. No forced upgrades were applied because major-version changes could break PDF, spreadsheet, document, or Prisma functionality. Re-run `npm audit` after lockfile reconciliation and review each advisory.
+- Follow-up remediation pinned compatible patched transitive packages and replaced vulnerable spreadsheet/image-size packages. The regenerated lockfile now passes `npm ci` and `npm audit --audit-level=high` with 0 vulnerabilities; CI treats high/critical findings as a failure.
 - Resend email delivery and sender verification are not currently proven by a live send test.
 - No independent penetration test, production load test, or physical Android visual QA is claimed.
 
 ## Dependency vulnerability inventory
-The latest CI dependency inventory reports 7 high-severity findings and 0 critical findings: `@prisma/config` / `prisma` (through `deepmerge-ts` and `effect`), `pptxgenjs` / `image-size`, and `xlsx`. The available Prisma and PptxGenJS fixes require major-version changes; `xlsx` has no fix available through npm. No `npm audit fix --force` was run. Review and upgrade these packages in isolated compatibility-tested changes. The CI inventory step is non-blocking, so a green CI result does not mean the dependency tree is vulnerability-free.
+The latest verified dependency audit reports 0 vulnerabilities (0 high, 0 critical). The lockfile resolves `deepmerge-ts` 8.0.2, `effect` 3.22.5, the patched `@keep-lts/xlsx` 0.18.6 distribution, and `image-size-next` 1.2.2 for PptxGenJS. CI uses a strict audit gate.
 
 ## Required operational safeguards
 - Store all secrets only in server-side Vercel environment variables.
