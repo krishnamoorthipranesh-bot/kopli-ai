@@ -9,6 +9,7 @@ import cors from "cors";
 import multer from "multer";
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import crypto from "node:crypto";
@@ -22,7 +23,7 @@ const PptxGenJS = require("pptxgenjs");
 import rateLimit from "express-rate-limit";
 import mammoth from "mammoth";
 import pdfParse from "pdf-parse/lib/pdf-parse.js";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { tavily } from "@tavily/core";
 import { PrismaClient } from "@prisma/client";
 import helmet from "helmet";
@@ -57,7 +58,7 @@ export function isAllowedOrigin(origin?: string, hostHeader?: string): boolean {
   for (const vercelHost of [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]) {
     if (vercelHost && origin.toLowerCase() === `https://${vercelHost.toLowerCase()}`) return true;
   }
-  if (/^https:\/\/[a-z0-9-]+\.onrender\.com$/i.test(origin)) return true;
+
   if (process.env.ALLOWED_ORIGINS) {
     const list = process.env.ALLOWED_ORIGINS.split(",").map(item => item.trim().toLowerCase());
     if (list.includes(origin.toLowerCase())) return true;
@@ -77,7 +78,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(cookieParser());
-app.use(express.json({ limit: "20mb" }));
+app.use(express.json({ limit: "2mb" }));
 
 
 app.use(rateLimit({
@@ -92,6 +93,96 @@ const storage = process.env.VERCEL ? path.join("/tmp", "kopli-ai-storage") : pat
 const generated = path.join(storage, "generated");
 const uploads = path.join(storage, "uploads");
 for (const dir of [storage, generated, uploads]) fs.mkdirSync(dir, { recursive: true });
+const storageBucket = process.env.SUPABASE_STORAGE_BUCKET?.trim() || "kopli-user-files";
+const persistentStorageConfigured = () => configured(process.env.SUPABASE_URL) && configured(process.env.SUPABASE_SERVICE_ROLE_KEY);
+function storageObjectUrl(objectPath: string) {
+  const base = process.env.SUPABASE_URL?.trim().replace(/\/+$/, "");
+  if (!base || !persistentStorageConfigured()) throw new Error("Persistent file storage is not configured.");
+  const encodedPath = objectPath.split("/").map(segment => encodeURIComponent(segment)).join("/");
+  return `${base}/storage/v1/object/${storageBucket}/${encodedPath}`;
+}
+async function uploadPersistentObject(objectPath: string, bytes: Buffer, mimeType: string) {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  const response = await fetch(storageObjectUrl(objectPath), {
+    method: "POST",
+    headers: { apikey: key || "", Authorization: `Bearer ${key || ""}`, "Content-Type": mimeType, "x-upsert": "true" },
+    body: new Uint8Array(bytes),
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok) {
+    const status = response.status;
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`Persistent storage upload failed (HTTP ${status}).`);
+  }
+}
+async function downloadPersistentObject(objectPath: string): Promise<Buffer> {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  const url = storageObjectUrl(objectPath).replace("/storage/v1/object/", "/storage/v1/object/authenticated/");
+  const response = await fetch(url, {
+    headers: { apikey: key || "", Authorization: `Bearer ${key || ""}` },
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error("The stored file could not be retrieved.");
+  }
+  return Buffer.from(await response.arrayBuffer());
+}
+async function deletePersistentObject(objectPath: string) {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  const base = process.env.SUPABASE_URL?.trim().replace(/\/+$/, "");
+  if (!base || !key) throw new Error("Persistent file storage is not configured.");
+  const response = await fetch(`${base}/storage/v1/object/${storageBucket}`, {
+    method: "DELETE",
+    headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ prefixes: [objectPath] }),
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok && response.status !== 404) throw new Error("The stored file could not be deleted.");
+}
+function persistentObjectPath(userId: string, kind: string, id: string, name: string) {
+  const extension = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 12);
+  return `${userId}/${kind}/${id}${extension}`;
+}
+async function saveUserFile(args: { id: string; userId: string; name: string; mimeType: string; bytes: Buffer; kind: string; localPath: string }) {
+  if (!prisma) throw new Error("File metadata database is unavailable.");
+  let storedPath = args.localPath;
+  if (process.env.VERCEL && persistentStorageConfigured()) {
+    const objectPath = persistentObjectPath(args.userId, args.kind, args.id, args.name);
+    await uploadPersistentObject(objectPath, args.bytes, args.mimeType);
+    storedPath = `supabase://${objectPath}`;
+  }
+  try {
+    await prisma.storedFile.create({ data: {
+      id: args.id, userId: args.userId, name: args.name, mimeType: args.mimeType,
+      size: args.bytes.length, path: storedPath, kind: args.kind
+    } });
+  } catch (error) {
+    if (storedPath.startsWith("supabase://")) await deletePersistentObject(storedPath.slice("supabase://".length)).catch(() => undefined);
+    throw error;
+  }
+  if (storedPath.startsWith("supabase://")) await fs.promises.unlink(args.localPath).catch(() => undefined);
+  return storedPath;
+}
+async function readUserFile(record: { path: string } | null | undefined, fallbackPath?: string): Promise<Buffer | null> {
+  if (record?.path.startsWith("supabase://")) return downloadPersistentObject(record.path.slice("supabase://".length));
+  const localPath = record?.path || fallbackPath;
+  if (!localPath || !fs.existsSync(localPath)) return null;
+  return fs.promises.readFile(localPath);
+}
+async function cleanupExpiredGuestUploads() {
+  if (!prisma || !persistentStorageConfigured()) return;
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const expired = await prisma.storedFile.findMany({
+    where: { userId: null, kind: "guest-upload", createdAt: { lt: cutoff } },
+    select: { id: true, path: true }
+  });
+  for (const record of expired) {
+    if (record.path.startsWith("supabase://")) await deletePersistentObject(record.path.slice("supabase://".length)).catch(() => undefined);
+    await prisma.storedFile.deleteMany({ where: { id: record.id, userId: null } });
+  }
+}
+
 
 const conversations = new Map<string, { id: string; title: string; archived: boolean; pinned: boolean; mode: string; messages: Array<{ role: "user" | "assistant"; content: string }> }>();
 const configured = (value?: string) => Boolean(value && !/^YOUR_/i.test(value) && !/^replace_/i.test(value));
@@ -297,8 +388,7 @@ const allowedMimeTypes = new Set([
   "image/webp",
   "image/gif"
 ]);
-function hasValidFileSignature(filePath: string, mimeType: string) {
-  const bytes = fs.readFileSync(filePath);
+function hasValidFileSignatureBytes(bytes: Buffer, mimeType: string) {
   if (mimeType === "image/png") return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
   if (mimeType === "image/jpeg") return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   if (mimeType === "image/webp") return bytes.length >= 12 && bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP";
@@ -311,6 +401,9 @@ function hasValidFileSignature(filePath: string, mimeType: string) {
     return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1]));
   }
   return ["text/plain","text/csv","text/markdown","application/json","text/rtf","application/rtf"].includes(mimeType);
+}
+function hasValidFileSignature(filePath: string, mimeType: string) {
+  return hasValidFileSignatureBytes(fs.readFileSync(filePath), mimeType);
 }
 
 const zipTextExtensions = new Set([".txt", ".md", ".csv", ".json", ".xml", ".html", ".css", ".js", ".ts", ".tsx", ".jsx", ".py", ".java", ".go", ".rs", ".sql", ".yaml", ".yml", ".toml"]);
@@ -714,10 +807,25 @@ app.get("/api/status", async (_req, res) => {
     tavily: configured(process.env.TAVILY_API_KEY),
     cloudflareAi: Boolean(configured(process.env.CLOUDFLARE_ACCOUNT_ID) && configured(process.env.CLOUDFLARE_API_TOKEN)),
     database,
+    persistentFileStorage: !process.env.VERCEL || persistentStorageConfigured(),
+    fileStorageMode: process.env.VERCEL ? (persistentStorageConfigured() ? "supabase" : "temporary") : "local",
     demo: !configured(process.env.GROQ_API_KEY),
     model: aiConfig.groqModel
   });
 });
+
+
+const createCostLimiter = (windowMs: number, limit: number, message: string) => rateLimit({
+  windowMs, limit, standardHeaders: "draft-7", legacyHeaders: false,
+  message: { error: message }
+});
+const aiChatRateLimit = createCostLimiter(60 * 1000, 30, "Chat request limit reached. Please wait a minute and try again.");
+const searchRateLimit = createCostLimiter(60 * 1000, 20, "Search request limit reached. Please wait a minute and try again.");
+const researchRateLimit = createCostLimiter(60 * 1000, 10, "Research request limit reached. Please wait a minute and try again.");
+const imageSearchRateLimit = createCostLimiter(60 * 1000, 20, "Image search limit reached. Please wait a minute and try again.");
+const imageGenerationRateLimit = createCostLimiter(15 * 60 * 1000, 5, "Image generation limit reached. Please wait 15 minutes before generating more images.");
+const uploadRateLimit = createCostLimiter(15 * 60 * 1000, 20, "Upload limit reached. Please wait before uploading more files.");
+const documentRateLimit = createCostLimiter(15 * 60 * 1000, 8, "Document generation limit reached. Please wait 15 minutes before creating more files.");
 
 const authRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-7", legacyHeaders: false });
 
@@ -927,12 +1035,13 @@ app.get("/api/admin/status", async (req, res) => {
   } });
 });
 
-app.post("/api/chat", async (req, res) => {
+app.post("/api/chat", aiChatRateLimit, async (req, res) => {
   const { conversationId, message, mode = "smart", history = [], attachments = [] } = req.body as {
     conversationId?: string; message?: string; mode?: string; history?: Array<{ role: "user" | "assistant"; content: string }>;
     attachments?: Array<{ id?: string; mimeType?: string; fileName?: string }>;
   };
   if (!message?.trim()) return res.status(400).json({ error: "Message cannot be empty." });
+  if (message.length > 32000) return res.status(413).json({ error: "Messages must be 32,000 characters or fewer. Attach large documents instead." });
   const authenticatedUser = await currentUser(req);
   if (message.trim() === "/admin") {
     const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
@@ -951,12 +1060,13 @@ app.post("/api/chat", async (req, res) => {
     const fileId = path.basename(String(attachment?.id || ""));
     if (!fileId || fileId !== attachment.id) return res.status(400).json({ error: "An attachment reference is invalid." });
     const filePath = path.join(uploads, fileId);
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "An uploaded attachment has expired. Please attach it again." });
     const storedFile = prisma && databaseReady ? await prisma.storedFile.findUnique({ where: { id: fileId } }) : null;
     if (authenticatedUser && (!storedFile || storedFile.userId !== authenticatedUser.id)) return res.status(404).json({ error: "An uploaded attachment was not found." });
     if (!authenticatedUser && storedFile?.userId) return res.status(404).json({ error: "An uploaded attachment was not found." });
     const mimeType = storedFile?.mimeType || String(attachment?.mimeType || "");
-    if (!allowedMimeTypes.has(mimeType) || !hasValidFileSignature(filePath, mimeType)) {
+    const fileBytes = await readUserFile(storedFile, filePath);
+    if (!fileBytes) return res.status(404).json({ error: "An uploaded attachment has expired. Please attach it again." });
+    if (!allowedMimeTypes.has(mimeType) || !hasValidFileSignatureBytes(fileBytes, mimeType)) {
       return res.status(422).json({ error: "An attachment failed its type or file-integrity check. Please attach it again." });
     }
     if (!mimeType.startsWith("image/")) continue;
@@ -964,7 +1074,7 @@ app.post("/api/chat", async (req, res) => {
       return res.status(415).json({ error: "Image analysis supports JPEG, PNG, and WEBP files. Convert this image and attach it again." });
     }
     if (imageInputs.length >= 3) return res.status(400).json({ error: "Attach up to 3 images in one message." });
-    const bytes = fs.readFileSync(filePath);
+    const bytes = fileBytes;
     totalImageBytes += bytes.length;
     if (totalImageBytes > 15 * 1024 * 1024) return res.status(413).json({ error: "Keep attached images under 15 MB combined for reliable AI analysis." });
     imageInputs.push({ mimeType, dataUrl: `data:${mimeType};base64,${bytes.toString("base64")}` });
@@ -1167,8 +1277,8 @@ app.post("/api/chat", async (req, res) => {
       await runGroq();
     } catch (error: any) {
       if (!res.destroyed && !clientDisconnected) {
-        const message = error?.message || "Groq AI provider request failed.";
-        res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
+        console.error("Chat provider request failed.", error);
+        res.write(`data: ${JSON.stringify({ error: "The AI service could not complete this response. Please retry." })}\n\n`);
       }
     }
   }
@@ -1298,7 +1408,7 @@ async function performSearch(prompt: string): Promise<{ query: string; queries: 
   return { query: prompt, queries, sources: sources.slice(0, 20) };
 }
 
-app.post("/api/search", async (req, res) => {
+app.post("/api/search", searchRateLimit, async (req, res) => {
   const prompt = String(req.body?.query || "").trim();
   if (!prompt) return res.status(400).json({ error: "Search query cannot be empty." });
   if (!configured(process.env.TAVILY_API_KEY)) return res.status(503).json({ error: "Web search is temporarily unavailable. Please try again later.", sources: [] });
@@ -1310,7 +1420,7 @@ app.post("/api/search", async (req, res) => {
   }
 });
 
-app.post("/api/chat/search", async (req, res) => {
+app.post("/api/chat/search", researchRateLimit, async (req, res) => {
   const prompt = String(req.body?.message || req.body?.query || "").trim();
   if (!prompt) return res.status(400).json({ error: "Search prompt cannot be empty." });
   if (!configured(process.env.TAVILY_API_KEY) || !groq) return res.status(503).json({ error: "Web-assisted chat is temporarily unavailable. Please try again later." });
@@ -1381,7 +1491,7 @@ app.post("/api/chat/search", async (req, res) => {
   res.json({ answer, sources, conversationId });
 });
 
-app.post("/api/images/search", async (req, res) => {
+app.post("/api/images/search", imageSearchRateLimit, async (req, res) => {
   const prompt = String(req.body?.prompt || "").trim();
   if (!prompt) return res.status(400).json({ error: "Image search prompt cannot be empty." });
   if (prompt.length > 500) return res.status(400).json({ error: "Image search prompts must be 500 characters or fewer." });
@@ -1423,23 +1533,17 @@ app.post("/api/images/search", async (req, res) => {
     if (!response.ok) throw new Error(`Wikimedia Commons returned HTTP ${response.status}.`);
     const payload: any = await response.json();
     const pages = Object.values(payload?.query?.pages || {}) as any[];
-    const queryTokens = query.toLocaleLowerCase().split(/[^\\p{L}\\p{N}]+/u).filter(token => token.length > 2);
     const images = pages.flatMap(page => {
       const info = page?.imageinfo?.[0];
       const imageUrl = info?.thumburl || info?.url;
       if (!imageUrl || !/^https:\/\//i.test(imageUrl) || !String(info?.mime || "").startsWith("image/")) return [];
-      const rawTitle = String(page.title || "Image").replace(/^File:/i, "");
-      const titleText = rawTitle.toLocaleLowerCase().replace(/[_-]+/g, " ");
-      const matchedTokens = queryTokens.filter(token => titleText.includes(token));
-      const relevance = queryTokens.length ? matchedTokens.length / queryTokens.length : 0;
-      if (queryTokens.length && (matchedTokens.length === 0 || (queryTokens.length > 1 && relevance < 0.34))) return [];
+      const title = String(page.title || "Image").replace(/^File:/i, "");
       return [{
-        title: rawTitle,
+        title,
         url: imageUrl,
-        source: `https://commons.wikimedia.org/wiki/${encodeURIComponent(String(page.title || "").replace(/ /g, "_"))}`,
-        relevance
+        source: `https://commons.wikimedia.org/wiki/${encodeURIComponent(String(page.title || "").replace(/ /g, "_"))}`
       }];
-    }).sort((a, b) => b.relevance - a.relevance).slice(0, 4).map(({ relevance: _relevance, ...image }) => image);
+    }).slice(0, 4);
     return res.json({ query, images });
   } catch (error: any) {
     console.error("Relevant image search failed.", error);
@@ -1447,7 +1551,7 @@ app.post("/api/images/search", async (req, res) => {
   }
 });
 
-app.post("/api/images/generate", async (req, res) => {
+app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to generate images." });
   const prompt = String(req.body?.prompt || "").trim();
@@ -1560,11 +1664,8 @@ app.post("/api/images/generate", async (req, res) => {
   const file = path.join(generated, `${id}.${actualFormat}`);
   fs.writeFileSync(file, buffer);
   const mimeType = actualFormat === "jpg" ? "image/jpeg" : `image/${actualFormat}`;
-  if (prisma) {
-    await prisma.storedFile.create({
-      data: { id, userId: user.id, name: `${id}.${actualFormat}`, mimeType, size: buffer.length, path: file, kind: "image" }
-    }).catch(error => { console.error("Could not add the generated image to the library.", error); throw error; });
-  }
+  await saveUserFile({ id, userId: user.id, name: `${id}.${actualFormat}`, mimeType, bytes: buffer, kind: "image", localPath: file })
+    .catch(error => { console.error("Could not save the generated image.", error); throw error; });
   res.json({
     id,
     url: `/api/images/${id}`,
@@ -1579,51 +1680,90 @@ app.post("/api/images/generate", async (req, res) => {
 app.get("/api/images/:imageId", async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to view generated images." });
-  if (prisma) { const record = await prisma.storedFile.findFirst({ where: { id: path.basename(req.params.imageId), userId: user.id } }); if (!record) return res.status(404).json({ error: "Generated image not found." }); }
   const imageId = path.basename(req.params.imageId);
-  const files = fs.readdirSync(generated).filter(name => path.basename(name, path.extname(name)) === imageId);
-  const file = files.map(name => path.join(generated, name)).find(candidate => fs.existsSync(candidate));
-  if (!file) return res.status(404).json({ error: "Generated image not found." });
-  const bytes = fs.readFileSync(file);
-  const ext = path.extname(file).toLowerCase();
-  const mimeType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".webp" ? "image/webp" : "image/png";
+  const record = prisma ? await prisma.storedFile.findFirst({ where: { id: imageId, userId: user.id, kind: "image" } }) : null;
+  if (prisma && !record) return res.status(404).json({ error: "Generated image not found." });
+  const localFile = fs.readdirSync(generated).find(name => path.basename(name, path.extname(name)) === imageId);
+  const localPath = localFile ? path.join(generated, localFile) : undefined;
+  const bytes = await readUserFile(record, localPath);
+  if (!bytes) return res.status(404).json({ error: "Generated image not found." });
+  const ext = record?.name ? path.extname(record.name).toLowerCase() : path.extname(localPath || "").toLowerCase();
+  const mimeType = record?.mimeType || (ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".webp" ? "image/webp" : "image/png");
   res.setHeader("Content-Type", mimeType);
   res.setHeader("Cache-Control", "private, max-age=86400");
-  res.setHeader("Content-Disposition", `inline; filename="${path.basename(file)}"`);
+  res.setHeader("Content-Disposition", `inline; filename="${record?.name || path.basename(localPath || imageId)}"`);
   res.send(bytes);
 });
 
-app.post("/api/upload", upload.array("files", 10), async (req, res) => {
+app.post("/api/upload", uploadRateLimit, upload.array("files", 10), async (req, res) => {
   const user = await currentUser(req);
   const rawFiles = req.files as Express.Multer.File[] || [];
   const files = rawFiles.flatMap(file => {
     const filePath = path.join(uploads, file.filename);
-    if (!hasValidFileSignature(filePath, file.mimetype)) {
-      fs.rmSync(filePath, { force: true });
-      return [];
-    }
+    if (!hasValidFileSignature(filePath, file.mimetype)) return [];
     return [{
       id: file.filename,
-      fileName: path.basename(file.originalname).replace(/[^\w.\- ()]/g, "_").slice(0, 180),
+      fileName: path.basename(file.originalname).replace(/[^\w. ()-]/g, "_").slice(0, 180),
       mimeType: file.mimetype,
       size: file.size,
       url: `/api/files/${file.filename}`
     }];
   });
-  if (files.length !== rawFiles.length) {
-    for (const file of rawFiles) fs.rmSync(path.join(uploads, file.filename), { force: true });
+  if (!files.length || files.length !== rawFiles.length) {
+    for (const file of rawFiles) await fs.promises.unlink(path.join(uploads, file.filename)).catch(() => undefined);
     return res.status(422).json({ error: "One or more files failed MIME and file-signature validation. No files were attached." });
   }
-  if (prisma && databaseReady && user) {
+  if (prisma && databaseReady && persistentStorageConfigured()) {
+    const savedIds: string[] = [];
     try {
-      await prisma.storedFile.createMany({ data: files.map(item => ({ id: item.id, userId: user.id, name: item.id, mimeType: item.mimeType, size: item.size, path: path.join(uploads, item.id), kind: "upload" })) });
+      if (!user) await cleanupExpiredGuestUploads();
+      for (const item of files) {
+        const localPath = path.join(uploads, item.id);
+        const bytes = await fs.promises.readFile(localPath);
+        if (user) {
+          await saveUserFile({ id: item.id, userId: user.id, name: item.id, mimeType: item.mimeType, bytes, kind: "upload", localPath });
+        } else {
+          const objectPath = `guest/${item.id}`;
+          await uploadPersistentObject(objectPath, bytes, item.mimeType);
+          try {
+            await prisma.storedFile.create({ data: {
+              id: item.id, userId: null, name: item.id, mimeType: item.mimeType,
+              size: bytes.length, path: `supabase://${objectPath}`, kind: "guest-upload"
+            } });
+          } catch (error) {
+            await deletePersistentObject(objectPath).catch(() => undefined);
+            throw error;
+          }
+          await fs.promises.unlink(localPath).catch(() => undefined);
+        }
+        savedIds.push(item.id);
+      }
     } catch (error) {
-      for (const item of files) fs.rmSync(path.join(uploads, item.id), { force: true });
-      console.error("Could not record uploaded files:", error);
-      return res.status(500).json({ error: "The files could not be safely saved. Please try again." });
+      for (const id of savedIds) {
+        const record = await prisma.storedFile.findUnique({ where: { id } }).catch(() => null);
+        if (record?.path.startsWith("supabase://")) await deletePersistentObject(record.path.slice("supabase://".length)).catch(() => undefined);
+        await prisma.storedFile.deleteMany({ where: { id } }).catch(() => undefined);
+      }
+      for (const file of rawFiles) await fs.promises.unlink(path.join(uploads, file.filename)).catch(() => undefined);
+      console.error("Could not persist uploaded files.", error);
+      return res.status(503).json({ error: "The files could not be safely saved. Please try again." });
+    }
+  } else if (user && prisma && databaseReady) {
+    const savedIds: string[] = [];
+    try {
+      for (const item of files) {
+        const localPath = path.join(uploads, item.id);
+        const bytes = await fs.promises.readFile(localPath);
+        await saveUserFile({ id: item.id, userId: user.id, name: item.id, mimeType: item.mimeType, bytes, kind: "upload", localPath });
+        savedIds.push(item.id);
+      }
+    } catch (error) {
+      for (const id of savedIds) await prisma.storedFile.deleteMany({ where: { id, userId: user.id } }).catch(() => undefined);
+      for (const file of rawFiles) await fs.promises.unlink(path.join(uploads, file.filename)).catch(() => undefined);
+      console.error("Could not persist uploaded files.", error);
+      return res.status(503).json({ error: "The files could not be safely saved. Please try again." });
     }
   }
-  if (!files.length) return res.status(422).json({ error: "No uploaded file passed MIME and file-signature validation." });
   res.json({ files });
 });
 
@@ -1634,34 +1774,76 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
   if (user && (!storedFile || storedFile.userId !== user.id)) return res.status(404).json({ error: "Uploaded file not found." });
   if (!user && storedFile?.userId) return res.status(404).json({ error: "Uploaded file not found." });
   const file = path.join(uploads, fileId);
-  if (!fs.existsSync(file)) return res.status(404).json({ error: "Uploaded file not found." });
+  if (user && (!storedFile || storedFile.userId !== user.id)) return res.status(404).json({ error: "Uploaded file not found." });
+  if (!user && storedFile?.userId) return res.status(404).json({ error: "Uploaded file not found." });
+  const fileBytes = await readUserFile(storedFile, file);
+  if (!fileBytes) return res.status(404).json({ error: "Uploaded file not found." });
   const mimeType = storedFile?.mimeType || String(req.body?.mimeType || "");
+  if (!allowedMimeTypes.has(mimeType) || !hasValidFileSignatureBytes(fileBytes, mimeType)) return res.status(422).json({ error: "This upload failed file-integrity validation." });
   try {
     let text = "";
     let method = "";
     if (mimeType === "application/pdf" || fileId.toLowerCase().endsWith(".pdf")) {
-      const parsed = await pdfParse(fs.readFileSync(file));
+      const parsed = await pdfParse(fileBytes);
       text = parsed.text;
       method = "PDF text extraction";
     } else if (mimeType.includes("wordprocessingml") || fileId.toLowerCase().endsWith(".docx")) {
-      const parsed = await mammoth.extractRawText({ buffer: fs.readFileSync(file) });
+      const parsed = await mammoth.extractRawText({ buffer: fileBytes });
       text = parsed.value;
       method = "DOCX text extraction";
-    } else if (mimeType.includes("spreadsheet") || /\.(xlsx|xls|csv)$/i.test(fileId)) {
-      const workbook = XLSX.read(fs.readFileSync(file), { type: "buffer" });
-      text = workbook.SheetNames.map(name => {
-        const sheet = workbook.Sheets[name];
-        return `## ${name}\n${XLSX.utils.sheet_to_csv(sheet)}`;
+    } else if (mimeType === "text/csv" || /\.csv$/i.test(fileId)) {
+      const workbook = new ExcelJS.Workbook();
+      const csvBuffer = Buffer.alloc(fileBytes.length);
+      fileBytes.copy(csvBuffer);
+      const worksheet = await workbook.csv.read(Readable.from([csvBuffer]));
+      const rows: string[] = [];
+      worksheet.eachRow({ includeEmpty: false }, row => {
+        const values: string[] = [];
+        row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+          values[columnNumber - 1] = cell.value === null || cell.value === undefined ? "" : String(cell.value);
+        });
+        rows.push(values.join("\t"));
+      });
+      text = `## ${worksheet.name}\n${rows.join("\n")}`;
+      method = "CSV text extraction";
+    } else if (mimeType === "application/vnd.ms-excel" || /\.xls$/i.test(fileId)) {
+      return res.status(415).json({ error: "Legacy .xls files are not supported safely. Save the spreadsheet as .xlsx or .csv and upload it again." });
+    } else if (mimeType.includes("spreadsheet") || /\.xlsx$/i.test(fileId)) {
+      const workbook = new ExcelJS.Workbook();
+      const excelBytes = Uint8Array.from(fileBytes);
+      await workbook.xlsx.load(excelBytes.buffer as ArrayBuffer);
+      const cellText = (value: unknown): string => {
+        if (value === null || value === undefined) return "";
+        if (value instanceof Date) return value.toISOString();
+        if (typeof value === "object") {
+          const item = value as Record<string, unknown>;
+          if (typeof item.text === "string") return item.text;
+          if ("result" in item) return String(item.result ?? "");
+          if (Array.isArray(item.richText)) return item.richText.map(part => String((part as { text?: unknown }).text ?? "")).join("");
+          return JSON.stringify(value);
+        }
+        return String(value);
+      };
+      text = workbook.worksheets.map(sheet => {
+        const rows: string[] = [];
+        sheet.eachRow({ includeEmpty: false }, row => {
+          const values: string[] = [];
+          row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+            values[columnNumber - 1] = cellText(cell.value);
+          });
+          rows.push(values.join("\t"));
+        });
+        return `## ${sheet.name}\n${rows.join("\n")}`;
       }).join("\n\n");
       method = "Spreadsheet text extraction";
     } else if (/\.txt|\.md|\.rtf|\.json|\.csv$/i.test(fileId) || ["text/plain","text/markdown","text/rtf","application/rtf","application/json","text/csv"].includes(mimeType)) {
       text = fs.readFileSync(file, "utf8");
       method = "Text extraction";
     } else if (mimeType.includes("presentationml") || /\.pptx$/i.test(fileId)) {
-      text = extractTextFromZipArchive(fs.readFileSync(file));
+      text = extractTextFromZipArchive(fileBytes);
       method = "PPTX text extraction";
     } else if (mimeType === "application/zip" || mimeType === "application/x-zip-compressed" || mimeType === "application/x-zip") {
-      text = extractTextFromZipArchive(fs.readFileSync(file));
+      text = extractTextFromZipArchive(fileBytes);
       method = "ZIP text extraction";
     } else {
       return res.status(422).json({ error: "This file type cannot be analyzed by the configured text extractor." });
@@ -1728,7 +1910,10 @@ async function generateStructuredContent(prompt: string, topic: string, format: 
       const bodyParagraphs = json.sections.flatMap((section: any) => Array.isArray(section?.paragraphs) ? section.paragraphs : [])
         .filter((paragraph: unknown) => typeof paragraph === "string" && paragraph.trim().length >= 45);
       const bodyWords = bodyParagraphs.join(" ").trim().split(/\s+/).filter(Boolean).length;
-      if (bodyParagraphs.length < 3 || bodyWords < 120) throw new Error("The document draft is incomplete: substantive body paragraphs are missing.");
+      const shortRequested = /\b(short|brief|concise|one[- ]page|summary|abstract)\b/i.test(prompt);
+      const minimumParagraphs = shortRequested ? 3 : 6;
+      const minimumWords = shortRequested ? 120 : 500;
+      if (bodyParagraphs.length < minimumParagraphs || bodyWords < minimumWords) throw new Error("The document draft is incomplete. Please retry so the full requested content can be generated.");
     }
     return json;
   } catch (error) {
@@ -1805,13 +1990,14 @@ async function generateFile(req: express.Request, res: express.Response) {
   try {
     if (format === "xlsx" || format === "xls") {
       const structured = await generateStructuredContent(prompt, topic, "xlsx") as any;
-      const workbook = XLSX.utils.book_new();
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet("Data");
       const rows = [structured.columns, ...structured.rows.slice(0, 100).map((row: unknown[]) => structured.columns.map((_: unknown, index: number) => String(row[index] ?? "").slice(0, 500)))];
-      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "Data");
+      worksheet.addRows(rows);
       const file = path.join(generated, `${id}.xlsx`);
-      const bytes = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+      const bytes = Buffer.from(await workbook.xlsx.writeBuffer());
       fs.writeFileSync(file, bytes);
-      if (prisma) await prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: bytes.length, path: file, kind: "document" } }).catch(error => { console.error("Could not add the generated spreadsheet to the library.", error); throw error; });
+      await saveUserFile({ id, userId: user.id, name: `${id}.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes, kind: "document", localPath: file });
       return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Workbook.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", url: `/api/files/${id}.xlsx`, format: "XLSX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
@@ -1834,7 +2020,7 @@ async function generateFile(req: express.Request, res: express.Response) {
         pdf.on("error", reject);
       });
       const bytes = fs.readFileSync(file);
-      if (prisma) await prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.pdf`, mimeType: "application/pdf", size: bytes.length, path: file, kind: "document" } }).catch(error => { console.error("Could not add the generated PDF to the library.", error); throw error; });
+      await saveUserFile({ id, userId: user.id, name: `${id}.pdf`, mimeType: "application/pdf", bytes, kind: "document", localPath: file });
       return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Report.pdf`, mimeType: "application/pdf", url: `/api/files/${id}.pdf`, format: "PDF", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
@@ -1875,7 +2061,7 @@ async function generateFile(req: express.Request, res: express.Response) {
       await (pptx as any).writeFile({ fileName: file });
       if (!fs.existsSync(file) || fs.statSync(file).size < 1000) throw new Error("PowerPoint file generation produced an invalid file.");
       const bytes = fs.readFileSync(file);
-      if (prisma) await prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", size: bytes.length, path: file, kind: "document" } }).catch(error => { console.error("Could not add the generated presentation to the library.", error); throw error; });
+      await saveUserFile({ id, userId: user.id, name: `${id}.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", bytes, kind: "document", localPath: file });
       return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Presentation.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", url: `/api/files/${id}.pptx`, format: "PPTX", slideCount: slides.length, ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
@@ -1900,14 +2086,14 @@ async function generateFile(req: express.Request, res: express.Response) {
     await Packer.toBuffer(doc).then(buffer => fs.writeFileSync(file, buffer));
     if (!fs.existsSync(file) || fs.statSync(file).size < 1000) throw new Error("Word file generation produced an invalid file.");
     const bytes = fs.readFileSync(file);
-    if (prisma) await prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: bytes.length, path: file, kind: "document" } }).catch(error => { console.error("Could not add the generated document to the library.", error); throw error; });
+    await saveUserFile({ id, userId: user.id, name: `${id}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes, kind: "document", localPath: file });
     return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Document.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", url: `/api/files/${id}.docx`, format: "DOCX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
   } catch (error: any) {
     res.status(error?.statusCode || 500).json({ error: error?.message || "Document generation failed." });
   }
 }
 
-app.post("/api/documents/draft", async (req, res) => {
+app.post("/api/documents/draft", documentRateLimit, async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to create documents." });
   const prompt = String(req.body?.prompt || "").trim();
@@ -1922,7 +2108,7 @@ app.post("/api/documents/draft", async (req, res) => {
   }
 });
 
-app.post("/api/documents/export", async (req, res) => {
+app.post("/api/documents/export", documentRateLimit, async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to export documents." });
   const title = String(req.body?.title || "KOPLI AI Document").trim().slice(0, 160) || "KOPLI AI Document";
@@ -1945,41 +2131,30 @@ app.post("/api/documents/export", async (req, res) => {
   }
 });
 
-app.post("/api/documents/generate", generateFile);
-app.post("/api/presentations/generate", generateFile);
-app.post("/api/pdf/generate", generateFile);
+app.post("/api/documents/generate", documentRateLimit, generateFile);
+app.post("/api/presentations/generate", documentRateLimit, generateFile);
+app.post("/api/pdf/generate", documentRateLimit, generateFile);
 
 app.get("/api/files/:fileName", async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to access files." });
-  if (prisma) { const record = await prisma.storedFile.findFirst({ where: { name: path.basename(req.params.fileName), userId: user.id } }); if (!record) return res.status(404).json({ error: "File not found." }); }
   const fileName = path.basename(req.params.fileName);
-  const searchDirs = [generated, uploads];
-  for (const dir of searchDirs) {
-    const file = path.join(dir, fileName);
-    if (fs.existsSync(file)) {
-      const bytes = fs.readFileSync(file);
-      const ext = path.extname(fileName).toLowerCase();
-      const mimeTypes: Record<string, string> = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-        ".pdf": "application/pdf",
-        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".txt": "text/plain",
-        ".csv": "text/csv",
-        ".json": "application/json"
-      };
-      res.setHeader("Content-Type", mimeTypes[ext] || "application/octet-stream");
-      res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
-      return res.send(bytes);
-    }
-  }
-  res.status(404).json({ error: "File not found." });
+  const record = prisma ? await prisma.storedFile.findFirst({ where: { name: fileName, userId: user.id } }) : null;
+  if (prisma && !record) return res.status(404).json({ error: "File not found." });
+  const localPath = [generated, uploads].map(dir => path.join(dir, fileName)).find(candidate => fs.existsSync(candidate));
+  const bytes = await readUserFile(record, localPath);
+  if (!bytes) return res.status(404).json({ error: "File not found." });
+  const ext = path.extname(fileName).toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif",
+    ".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".txt": "text/plain", ".csv": "text/csv", ".json": "application/json"
+  };
+  res.setHeader("Content-Type", record?.mimeType || mimeTypes[ext] || "application/octet-stream");
+  res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+  res.setHeader("Cache-Control", "private, no-store");
+  return res.send(bytes);
 });
 
 app.get("/api/library", async (req, res) => {
@@ -1988,9 +2163,10 @@ app.get("/api/library", async (req, res) => {
   if (!prisma) return res.json({ files: [] });
   const records = await prisma.storedFile.findMany({ where: { userId: user.id }, orderBy: { createdAt: "desc" } });
   const files = records.flatMap(record => {
-    if (!fs.existsSync(record.path)) return [];
-    const stat = fs.statSync(record.path);
-    return [{ fileName: record.name, size: stat.size, type: record.mimeType.split("/")[1]?.toUpperCase() || record.kind.toUpperCase(), url: `/api/files/${encodeURIComponent(record.name)}`, updatedAt: stat.mtime.toISOString() }]
+    if (!record.path.startsWith("supabase://") && !fs.existsSync(record.path)) return [];
+    const size = record.size;
+    const updatedAt = record.createdAt.toISOString();
+    return [{ fileName: record.name, size, type: record.mimeType.split("/")[1]?.toUpperCase() || record.kind.toUpperCase(), url: `/api/files/${encodeURIComponent(record.name)}`, updatedAt }];
   });
   res.json({ files });
 });
@@ -1998,35 +2174,41 @@ app.get("/api/library", async (req, res) => {
 app.patch("/api/library/:fileName", async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to manage files." });
-  if (prisma) { const record = await prisma.storedFile.findFirst({ where: { name: path.basename(req.params.fileName), userId: user.id } }); if (!record) return res.status(404).json({ error: "File not found." }); }
+  if (!prisma) return res.status(503).json({ error: "File metadata database is unavailable." });
   const fileName = path.basename(req.params.fileName);
-  const nextName = path.basename(String(req.body?.name || "").trim());
+  const record = await prisma.storedFile.findFirst({ where: { name: fileName, userId: user.id } });
+  if (!record) return res.status(404).json({ error: "File not found." });
+  const requestedName = String(req.body?.name || "").trim().slice(0, 180);
+  const extension = path.extname(fileName);
+  const baseName = path.basename(requestedName, path.extname(requestedName)).replace(/[^\w. ()-]/g, "_").trim();
+  const nextName = baseName ? `${baseName}${extension}` : "";
   if (!nextName) return res.status(400).json({ error: "File name cannot be empty." });
-  for (const dir of [generated, uploads]) {
-    const file = path.join(dir, fileName);
-    if (fs.existsSync(file)) {
-      const target = path.join(dir, nextName);
-      if (fs.existsSync(target)) return res.status(409).json({ error: "A file with that name already exists." });
-      fs.renameSync(file, target);
-      return res.json({ fileName: nextName, url: `/api/files/${encodeURIComponent(nextName)}` });
-    }
+  const duplicate = await prisma.storedFile.findFirst({ where: { userId: user.id, name: nextName, id: { not: record.id } } });
+  if (duplicate) return res.status(409).json({ error: "A file with that name already exists." });
+  if (!record.path.startsWith("supabase://")) {
+    const target = path.join(path.dirname(record.path), nextName);
+    if (fs.existsSync(record.path)) await fs.promises.rename(record.path, target);
+    await prisma.storedFile.update({ where: { id: record.id }, data: { name: nextName, path: target } });
+  } else {
+    await prisma.storedFile.update({ where: { id: record.id }, data: { name: nextName } });
   }
-  res.status(404).json({ error: "File not found." });
+  return res.json({ fileName: nextName, url: `/api/files/${encodeURIComponent(nextName)}` });
 });
 
 app.delete("/api/library/:fileName", async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to manage files." });
-  if (prisma) { const record = await prisma.storedFile.findFirst({ where: { name: path.basename(req.params.fileName), userId: user.id } }); if (!record) return res.status(404).json({ error: "File not found." }); }
+  if (!prisma) return res.status(503).json({ error: "File metadata database is unavailable." });
   const fileName = path.basename(req.params.fileName);
-  for (const dir of [generated, uploads]) {
-    const file = path.join(dir, fileName);
-    if (fs.existsSync(file)) {
-      fs.unlinkSync(file);
-      return res.status(204).end();
-    }
+  const record = await prisma.storedFile.findFirst({ where: { name: fileName, userId: user.id } });
+  if (!record) return res.status(404).json({ error: "File not found." });
+  if (record.path.startsWith("supabase://")) {
+    await deletePersistentObject(record.path.slice("supabase://".length));
+  } else {
+    await fs.promises.unlink(record.path).catch(() => undefined);
   }
-  res.status(404).json({ error: "File not found." });
+  await prisma.storedFile.delete({ where: { id: record.id } });
+  return res.status(204).end();
 });
 
 app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -2040,11 +2222,18 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
   res.status(status >= 400 && status < 600 ? status : 500).json({ error: status === 413 ? "The request is too large." : "The request could not be completed." });
 });
 
-app.get(["/health", "/api/health"], (_req, res) => res.json({
-  status: databaseStatus === "unavailable" ? "degraded" : databaseStatus === "starting" ? "starting" : "ok",
-  ready: true,
-  persistence: databaseStatus
-}));
+app.get(["/health", "/api/health"], (_req, res) => {
+  const ready = databaseStatus === "ready";
+  const fileStorageReady = !process.env.VERCEL || persistentStorageConfigured();
+  const status = ready && fileStorageReady ? "ok" : "degraded";
+  return res.status(ready ? 200 : 503).json({
+    status,
+    ready,
+    persistence: databaseStatus,
+    fileStorage: fileStorageReady ? "persistent" : "temporary",
+    fileStorageConfigured: fileStorageReady
+  });
+});
 
 if (!process.env.VERCEL) app.use(express.static(path.join(root, "dist")));
 if (!process.env.VERCEL) app.get("/chat/:mode", (_req, res) => {

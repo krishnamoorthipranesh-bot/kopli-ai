@@ -675,6 +675,24 @@ function App() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
     textarea.scrollTop = textarea.scrollHeight;
   }, [prompt]);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const updateViewportHeight = () => {
+      const height = viewport?.height || window.innerHeight;
+      document.documentElement.style.setProperty("--kopli-viewport-height", `${Math.round(height)}px`);
+    };
+    updateViewportHeight();
+    viewport?.addEventListener("resize", updateViewportHeight);
+    viewport?.addEventListener("scroll", updateViewportHeight);
+    window.addEventListener("orientationchange", updateViewportHeight);
+    return () => {
+      viewport?.removeEventListener("resize", updateViewportHeight);
+      viewport?.removeEventListener("scroll", updateViewportHeight);
+      window.removeEventListener("orientationchange", updateViewportHeight);
+      document.documentElement.style.removeProperty("--kopli-viewport-height");
+    };
+  }, []);
+
 
   useEffect(() => () => {
     if (scrollFrameRef.current !== null) window.cancelAnimationFrame(scrollFrameRef.current);
