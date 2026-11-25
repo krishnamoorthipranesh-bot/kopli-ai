@@ -434,7 +434,7 @@
 .app.reduce-effects .messages { scroll-behavior:auto; }
 .app.reduce-effects .scroll-to-latest { animation:none;transition:none; }
 
-.explore-tool-grid { grid-template-columns:repeat(5,minmax(0,1fr));gap:12px; }
+.explore-tool-grid { grid-template-columns:repeat(3,minmax(0,1fr));gap:12px; }
 .explore-tool-card { position:relative;min-height:0;padding:10px 12px 13px;overflow:hidden;border-radius:17px;transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease; }
 .explore-tool-card:hover,.explore-tool-card:focus-visible { transform:translateY(-3px); }
 .explore-tool-card.selected { border-color:rgba(98,145,244,.62);box-shadow:0 0 0 2px rgba(98,145,244,.12),0 12px 30px rgba(43,93,185,.12); }
