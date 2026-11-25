@@ -915,7 +915,7 @@ app.get("/api/admin/status", async (req, res) => {
   if (!sessionUser || sessionUser.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
   res.json({ authorized: true, providerStatus: {
     groq: configured(process.env.GROQ_API_KEY),
-    gemini: configured(process.env.GEMINI_API_KEY),
+    gemini: false,
     tavily: configured(process.env.TAVILY_API_KEY),
     cloudflareAi: Boolean(configured(process.env.CLOUDFLARE_ACCOUNT_ID) && configured(process.env.CLOUDFLARE_API_TOKEN)),
     database: Boolean(prisma)
