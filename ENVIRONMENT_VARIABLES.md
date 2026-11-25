@@ -1,42 +1,46 @@
-# KOPLI AI – Environment Variables Specification
+# KOPLI AI – Environment Variables (Vercel + Supabase)
 
-This document lists all environment variables utilized by the **KOPLI AI** backend.
+All credentials belong in server-side Vercel environment variables. Never prefix secrets with `VITE_`, expose them to browser code, commit them to Git, or paste them into logs.
 
-> **CRITICAL SECURITY NOTE**: All API keys, secrets, and database credentials must remain on the server. Never commit `.env` files to git, and never expose private keys in frontend bundles.
+| Variable | Purpose | Required scope |
+|---|---|---|
+| `DATABASE_URL` | Supabase PostgreSQL connection used by Prisma for accounts, sessions, conversations, and file metadata | Production + Preview |
+| `SUPABASE_URL` | Supabase project URL used by the private Storage adapter | Production + Preview |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-only credential for private Storage upload/download/delete | Production + Preview when testing durable file storage |
+| `SUPABASE_STORAGE_BUCKET` | Storage bucket name; defaults to `kopli-user-files` | Optional |
+| `GROQ_API_KEY` | Chat, vision, and voice transcription provider | Production + Preview |
+| `GROQ_MODEL` | Main chat model identifier | Optional |
+| `GROQ_VISION_MODEL` | Vision model identifier | Optional |
+| `TAVILY_API_KEY` | Web search provider | Production + Preview |
+| `STABILITY_API_KEY` | Image generation provider | Production + Preview |
+| `RESEND_API_KEY` | Email delivery for verification and password reset | Production + Preview |
+| `EMAIL_FROM` | Verified sender identity used by Resend | Production + Preview |
+| `APP_URL` | Canonical app URL used to construct verification/reset links | Production + Preview |
+| `ALLOWED_ORIGINS` | Comma-separated list of additional allowed browser origins | As needed |
+| `SESSION_SECRET` | Server session/configuration secret; keep encrypted | Production + Preview |
+| `KOPLI_ADMIN_SECRET` | Administrative secret; keep encrypted | Production + Preview |
+| `KOPLI_OWNER_EMAIL` | Email address permitted to receive the owner role after email verification | Production + Preview |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account identifier for enabled Cloudflare integrations | If used |
+| `CLOUDFLARE_API_TOKEN` | Server-only Cloudflare API credential | If used |
+| `PORT` | Local Express development port; Vercel manages production function ports | Local only |
+| `NODE_ENV` | Runtime mode used for secure cookie behavior | Platform-managed |
 
----
+## Persistent file storage
 
-## 1. Environment Variable Reference
+The `kopli-user-files` bucket is private. Vercel Production must have both `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` configured for durable file storage. The service-role key must remain server-only. Without it, the application must not claim that uploads are durably stored; `/api/health` reports degraded readiness and Vercel file writes fail closed.
 
-| Variable Name | Required? | Default / Example | Purpose |
-|---|---|---|---|
-| `GROQ_API_KEY` | Optional (Activates live AI) | `gsk_...` | API key from Groq to power high-speed LLM reasoning, code generation, and chat completions. |
-| `GROQ_MODEL` | Optional | `openai/gpt-oss-120b` | Groq model identifier (alternatives: `llama-3.3-70b-versatile`, `mixtral-8x7b-32768`). |
-| `TAVILY_API_KEY` | Optional (Activates live search) | `tvly-...` | API key from Tavily to enable real-time internet search and citation retrieval. |
-| `STABILITY_API_KEY` | Optional (Activates image gen) | `sk-...` | API key from Stability AI to generate Stable Diffusion visual content in Explore mode. |
-| `DATABASE_URL` | Optional (Activates cloud DB) | `postgresql://user:pass@host:5432/db` | PostgreSQL connection string for user accounts, chat persistence, memory, and file metadata. |
-| `SUPABASE_URL` | Required for persistent file storage | `https://project-ref.supabase.co` | Supabase project URL used by the server-side Storage adapter. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Required for persistent file storage | Server-only secret | Server-side Storage access. Never expose this key in frontend code, browser storage, public logs or Git. |
-| `SUPABASE_STORAGE_BUCKET` | Optional | `kopli-user-files` | Existing private bucket for user uploads and generated files. |
-| `KOPLI_OWNER_EMAIL` | Recommended | `owner@example.com` | Email address designated as the administrator and project owner. Accounts matching this email receive the `owner` role automatically upon registration or login. |
-| `KOPLI_ADMIN_SECRET` | Recommended | 32+ char random hex string | Random secret key used for administrative verification and fallback session signing. Generate a strong random secret and configure it in Vercel. |
-| `SESSION_SECRET` | Recommended | 32+ char random hex string | Cryptographic secret key used to sign and verify HMAC-SHA256 session cookies (`kopli_session`). Automatically generated in Vercel via `render.yaml`. |
-| `PORT` | Optional | `8787` (local) | Local Express server port. Vercel manages production function ports. |
-| `RENDER_EXTERNAL_URL` | Optional | `https://kopli-ai.onrender.com` | Automatically supplied by Render to denote the public HTTPS URL for CORS and origin validation. |
-| `ALLOWED_ORIGINS` | Optional | `https://customdomain.com` | Comma-separated list of additional allowed cross-origin domains (e.g. for custom domain mappings). |
-| `NODE_ENV` | Optional | `production` | Node environment identifier. Enables production cookie security flags (`Secure`, `SameSite=Lax`). |
+## Authentication and email
 
----
+New registrations require email verification before sign-in. Configure `RESEND_API_KEY`, `EMAIL_FROM`, and `APP_URL` so verification and password-reset emails can be delivered and link back to the correct environment. Owner privileges are granted only after the configured owner email has been verified; matching an email address at login alone does not grant owner access.
 
-## 2. Persistent file storage
+## Preview isolation
 
-The Vercel deployment must have `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` configured as server-only Production and Preview environment variables. The existing `kopli-user-files` bucket is private. Without the service-role key, Vercel can only use temporary `/tmp` storage; the `/api/health` endpoint reports this as `fileStorageConfigured: false`. Never add the service-role key to a `VITE_` or `NEXT_PUBLIC_` variable.
+Preview variables should be scoped to the audit branch or another explicitly selected Preview branch and should point to an isolated test database/provider configuration where practical. Do not reuse Production database credentials for preview smoke tests unless the data and operational impact have been explicitly reviewed.
 
-## 3. Default Fallback Behavior ("Demo Mode")
+## Safe setup checklist
 
-KOPLI AI is designed with an active fallback layer:
-- If `GROQ_API_KEY` is omitted: The server answers with helpful setup guidance and identifies creator **Pranesh KK**.
-- If `DATABASE_URL` is omitted: Guest conversations persist in browser `localStorage`.
-- If `TAVILY_API_KEY` is omitted: The search endpoint returns an informative 503 notification explaining demo status without crashing.
-- If `STABILITY_API_KEY` is omitted: The image generator returns a friendly notice to configure the key in the backend.
-- Document creation (Word `.docx`, PowerPoint `.pptx`, PDF reports, Excel `.xlsx`) continues to function using rich built-in academic and professional templates even in demo mode!
+1. Add secrets directly in Vercel as encrypted/sensitive server-only variables.
+2. Rotate any credential that was accidentally stored as an environment-variable name or otherwise exposed.
+3. Remove malformed credential-shaped environment-variable entries after rotation.
+4. Redeploy Preview and verify `/health` and `/api/health`.
+5. Run authentication, chat, image, and private file upload/download tests before Production cutover.

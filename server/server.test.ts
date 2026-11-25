@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deflateRawSync } from "node:zlib";
-import { extractTextFromZipArchive, isAllowedOrigin } from "./index.js";
+import { extractTextFromZipArchive, isAllowedOrigin, shouldRejectEphemeralFileStorage } from "./index.js";
 import { containsSensitiveSecret, isPastContextQuery, memoryKeywords } from "./memory-utils.js";
 
 describe("origin and CORS security", () => {
@@ -103,5 +103,17 @@ describe("ZIP attachment text extraction", () => {
   it("rejects invalid archives and archives without readable text", () => {
     expect(() => extractTextFromZipArchive(Buffer.from("not a zip archive"))).toThrow("invalid");
     expect(() => extractTextFromZipArchive(makeZipFile("image.bin", "binary"))).toThrow("No supported readable text");
+  });
+});
+
+describe("persistent file storage readiness", () => {
+  it("rejects ephemeral storage on Vercel when Supabase Storage is not configured", () => {
+    expect(shouldRejectEphemeralFileStorage(true, false)).toBe(true);
+  });
+  it("allows durable storage when Supabase Storage is configured", () => {
+    expect(shouldRejectEphemeralFileStorage(true, true)).toBe(false);
+  });
+  it("allows local development storage outside Vercel", () => {
+    expect(shouldRejectEphemeralFileStorage(false, false)).toBe(false);
   });
 });

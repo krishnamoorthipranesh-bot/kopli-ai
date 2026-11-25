@@ -1,63 +1,40 @@
-# KOPLI AI – Deployment Audit Report
+# KOPLI AI – Deployment Audit (2026-11-25)
 
-## 1. Scope & Objective
+## Current architecture
 
-This audit validates the production readiness of **KOPLI AI** for deployment to **Render** using a containerized Docker architecture.
+- **Frontend:** Vite-built React application served through Vercel.
+- **Backend:** Express application bundled for the Vercel serverless handler at `api/handler.ts`.
+- **Database:** PostgreSQL through Prisma, connected to Supabase.
+- **Object storage:** private Supabase Storage bucket `kopli-user-files`.
+- **Hosting decision:** Vercel + Supabase. Render is not part of the current production deployment path.
 
----
+## Routing and build
 
-## 2. Docker & Container Audit
+- `vercel.json` routes `/health` and `/api/*` through the serverless API handler and sends remaining paths to the SPA entry point.
+- Build command runs Prisma client generation, TypeScript build checks, server bundling, and Vite build.
+- Vercel Preview deployment for the audit branch is **READY** at commit `b31caa29cb93c2c4bc52371fa9e58cede0024292`.
+- GitHub CI and dependency-lock verification both passed on that commit. The CI pipeline includes TypeScript, tests, production build, and `npm audit --audit-level=high`.
+- Latest build reported 0 npm audit vulnerabilities. It still emitted non-fatal npm configuration/install-script warnings; Prisma client generation and build completed.
 
-| Component | Status | Findings & Remediation |
-|---|---|---|
-| **Base Image** | **VERIFIED** | `node:22-bookworm-slim` provides modern Node.js runtime with minimal image footprint. |
-| **System Dependencies** | **FIXED** | Added `openssl` and `ca-certificates` in both build and runtime stages to ensure Prisma query engine executes without missing library faults. |
-| **Prisma Generation** | **FIXED** | Added explicit `RUN npx prisma generate` in build stage prior to compilation and copied generated client to runtime. |
-| **Production Runtime Package** | **FIXED** | Moved `tsx` to `dependencies` in `package.json` so `npm ci --omit=dev` retains `tsx` to execute `CMD ["npm", "start"]`. |
-| **Static Assets Layer** | **VERIFIED** | Frontend output in `/app/dist` is copied to runtime and served by Express `express.static(path.join(root, "dist"))`. |
-| **Storage Directories** | **VERIFIED** | `storage/generated` and `storage/uploads` are automatically created on boot via `fs.mkdirSync(..., { recursive: true })`. |
+## Production status
 
----
+- The `kopli-ai.vercel.app` alias currently resolves to the existing Production deployment from the `master` branch, not the audit branch.
+- Production was not changed by PR #15.
+- Production Vercel environment variables include the Supabase URL and database connection, but not `SUPABASE_SERVICE_ROLE_KEY`.
+- The private Storage bucket therefore cannot yet be certified as the active durable upload target for Production.
+- Three malformed credential-shaped variable names exist in Production and require provider credential rotation and cleanup.
+- Runtime log inspection for the recent 30-minute window returned no matching error/fatal entries. This is not a substitute for end-to-end functional tests.
 
-## 3. Render Blueprint (`render.yaml`) Audit
+## Cutover checklist
 
-| Property | Configured Value | Status |
-|---|---|---|
-| **Service Type** | `web` | Verified (Single service architecture) |
-| **Runtime** | `docker` | Verified (Uses repository root `Dockerfile`) |
-| **Plan** | `free` | Verified (No unapproved paid resources created) |
-| **Health Check Path** | `/api/status` | Verified (Returns HTTP 200 with JSON provider statuses) |
-| **PORT Binding** | Dynamic via `$PORT` | Verified (Server binds to `process.env.PORT || 8787`) |
-| **Auto-Generated Secrets** | `KOPLI_ADMIN_SECRET`, `SESSION_SECRET` | Configured with `generateValue: true` |
-| **Sync Secrets** | `GROQ_API_KEY`, `TAVILY_API_KEY`, `STABILITY_API_KEY`, `DATABASE_URL`, `KOPLI_OWNER_EMAIL` | Configured with `sync: false` for secure manual input |
+1. Rotate the affected Resend, Cloudflare, and Groq credentials; remove malformed Vercel environment entries and keep only correctly named variables.
+2. Add `SUPABASE_SERVICE_ROLE_KEY` to Vercel Production as an encrypted server-only variable; configure the same key for an isolated Preview environment if preview upload tests are required.
+3. Confirm `DATABASE_URL`, `SUPABASE_URL`, `APP_URL`, `ALLOWED_ORIGINS`, email delivery, and owner settings for the correct environments.
+4. Resolve/migrate the 19 legacy StoredFile metadata rows only after locating their original bytes.
+5. Run registration → verification → login → logout, chat modes, image generation/preview, file upload/download/delete, conversation history, account isolation, and mobile composer regression tests.
+6. Confirm `/health` returns liveness and `/api/health` returns readiness before merging.
+7. Merge only after review; verify the Production deployment reaches READY and the `kopli-ai.vercel.app` alias points to the new commit. Run post-deploy smoke tests and monitor errors.
 
----
+## Release decision
 
-## 4. Network, Routing & CORS Audit
-
-| Check | Result | Remediation |
-|---|---|---|
-| **SPA Catch-All Route** | **PASS** | `app.use((_req, res) => res.type("html").send(dist/index.html))` serves client routes (`/chat/:mode`, etc.). |
-| **Health Check Endpoint** | **PASS** | `/api/status` returns operational flags for database, Groq, Tavily, Stability AI without authentication. |
-| **Production CORS** | **FIXED** | Origin validation regex previously allowed only `localhost`. Refactored to dynamically accept `*.onrender.com`, `RENDER_EXTERNAL_URL`, same-host origins, and `ALLOWED_ORIGINS`. |
-| **Internal Search Loopback** | **FIXED** | Web-assisted chat (`/api/chat/search`) previously made an internal HTTP loopback fetch to `http://localhost:${PORT}` which could hang or fail under production networking. Replaced with direct helper function `performSearch()`. |
-
----
-
-## 5. Database & Migration Readiness
-
-- **Schema Engine**: Prisma ORM with PostgreSQL provider.
-- **Migration History**: Baseline migration created under `prisma/migrations/0_init/migration.sql`.
-- **Automatic Deployment**: Server initialization runs `npx prisma migrate deploy` safely when `DATABASE_URL` is detected, ensuring tables and foreign keys are created automatically upon connecting a database.
-- **Fallback State**: If `DATABASE_URL` is not provided, the server starts cleanly in local/guest session mode.
-
----
-
-## 6. Build & Bundle Verification
-
-- `npx prisma generate`: Client generated in <100ms.
-- `tsc -b`: Zero TypeScript compiler errors across server and client.
-- `vite build`: Assets bundled successfully:
-  - `dist/index.html`: 0.58 kB
-  - `dist/assets/index-DbGcZIwQ.css`: 73.34 kB (16.15 kB gzip)
-  - `dist/assets/index-DzAK6M--.js`: 443.31 kB (134.22 kB gzip)
+**Production cutover is blocked pending the checklist above.** A READY Preview build is not the same as a live Production update. No production database records or deployment have been modified by this audit branch.

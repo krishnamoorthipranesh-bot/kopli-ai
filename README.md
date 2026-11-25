@@ -22,7 +22,7 @@ KOPLI AI is a responsive AI assistant created and owned by Pranesh KK.
 
 Connect this repository to the Vercel project `kopli-ai`, deploy the `master` branch, and configure the production and preview environment variables documented in [ENVIRONMENT_VARIABLES.md](./ENVIRONMENT_VARIABLES.md). The Vercel serverless entry point is `api/handler.ts`; `vercel.json` routes API requests to it.
 
-After deployment, verify `/api/health`, sign-in, chat, search, image generation, and private file upload/download. Do not disable the legacy hosting service until those production checks pass.
+Before Production cutover, verify `/health` liveness and `/api/health` readiness, then test email verification, sign-in, chat modes, search, image generation/preview, and private file upload/download. Keep the current Production deployment unchanged until every check passes and the required encrypted storage secret is configured.
 
 ## Demo mode
 
