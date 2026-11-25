@@ -46,7 +46,7 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
       connectSrc: ["'self'", "https://api.groq.com", "https://api.tavily.com", "https://api.stability.ai"],
-      frameSrc: ["'none'"],
+      frameSrc: ["'self'"],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
       formAction: ["'self'"]
