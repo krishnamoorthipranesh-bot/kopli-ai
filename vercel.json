@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/health",
-      "destination": "https://kopli-ai-1.onrender.com/health"
+      "destination": "/api/health"
     }
   ],
   "installCommand": "npm install --include=dev"
