@@ -617,6 +617,17 @@ function App() {
     document.addEventListener("pointerdown", closeOutside);
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [attachmentMenuOpen]);
+  useEffect(() => {
+    if (!composerModeOpen && !chatActionsOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (composerModeOpen && !target.closest(".composer-mode-wrap")) setComposerModeOpen(false);
+      if (chatActionsOpen && !target.closest(".chat-actions-wrap")) setChatActionsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [composerModeOpen, chatActionsOpen]);
 
   useEffect(() => {
     const viewport = window.matchMedia("(max-width: 900px)");
