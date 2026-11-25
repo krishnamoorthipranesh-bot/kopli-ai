@@ -1810,7 +1810,8 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
       return res.status(415).json({ error: "Legacy .xls files are not supported safely. Save the spreadsheet as .xlsx or .csv and upload it again." });
     } else if (mimeType.includes("spreadsheet") || /\.xlsx$/i.test(fileId)) {
       const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.load(Buffer.from(fileBytes) as unknown as Buffer);
+      const excelBytes = Uint8Array.from(fileBytes);
+      await workbook.xlsx.load(excelBytes.buffer as ArrayBuffer);
       const cellText = (value: unknown): string => {
         if (value === null || value === undefined) return "";
         if (value instanceof Date) return value.toISOString();
