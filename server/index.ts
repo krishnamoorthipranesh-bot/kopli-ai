@@ -31,6 +31,9 @@ import bcrypt from "bcryptjs";
 import { containsSensitiveSecret, isPastContextQuery, memoryKeywords } from "./memory-utils.js";
 import { aiConfig, securityConfig } from "./config.js";
 
+function safeErrorCategory(error: unknown) {
+  return error instanceof Error ? error.name : "UnknownError";
+}
 const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
@@ -291,7 +294,7 @@ async function initializeDatabase() {
     } catch (error) {
       databaseReady = false;
       databaseStatus = attempt === 3 ? "unavailable" : "starting";
-      console.error(`Database connection attempt ${attempt + 1} of 4 failed.`, error);
+      console.error(`Database connection attempt ${attempt + 1} of 4 failed.`, safeErrorCategory(error));
       if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
     }
   }
@@ -505,7 +508,7 @@ app.post("/api/voice/transcribe", rateLimit({
     });
     res.json({ text: transcription.text || "" });
   } catch (error) {
-    console.error("Voice transcription failed:", error);
+    console.error("Voice transcription failed:", safeErrorCategory(error));
     res.status(502).json({ error: "Voice transcription failed. Please try recording again." });
   } finally {
     await fs.promises.unlink(audioPath).catch(() => undefined);
@@ -857,7 +860,7 @@ app.post("/api/auth/register", authRateLimit, async (req, res) => {
     await createSession(user.id, req, res);
     res.status(201).json({ user: { email: user.email, name: user.name, role } });
   } catch (error) {
-    console.error("Account registration failed:", error);
+    console.error("Account registration failed:", safeErrorCategory(error));
     if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
       return res.status(409).json({ error: "An account with this email already exists." });
     }
@@ -880,7 +883,7 @@ app.post("/api/auth/login", authRateLimit, async (req, res) => {
     await createSession(user.id, req, res);
     res.json({ user: { email: user.email, name: user.name, role } });
   } catch (error) {
-    console.error("Account login failed:", error);
+    console.error("Account login failed:", safeErrorCategory(error));
     res.status(500).json({ error: "Login failed." });
   }
 });
@@ -971,7 +974,7 @@ app.post("/api/auth/forgot-password", authRateLimit, async (req, res) => {
     res.json({ message: "If an account exists for that email, a password reset link has been sent." });
   } catch (error) {
     await prisma.passwordResetToken.deleteMany({ where: { tokenHash: hashToken(token) } });
-    console.error("Password recovery email request failed:", error);
+    console.error("Password recovery email request failed:", safeErrorCategory(error));
     res.status(502).json({ error: "The recovery email could not be sent. Please try again." });
   }
 });
@@ -1025,7 +1028,7 @@ app.post("/api/auth/logout", async (req, res) => {
     try {
       await prisma.authSession.deleteMany({ where: { tokenHash: hashToken(token) } });
     } catch (error) {
-      console.error("Could not invalidate account session:", error);
+      console.error("Could not invalidate account session:", safeErrorCategory(error));
       res.clearCookie("kopli_session", { path: "/", secure: securityConfig.isProduction || req.secure, sameSite: "lax" });
       return res.status(503).json({ error: "The session cookie was cleared, but the server could not confirm session invalidation." });
     }
@@ -1148,7 +1151,7 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
         }
       }
     } catch (error) {
-      console.error("Could not persist authenticated chat message:", error);
+      console.error("Could not persist authenticated chat message:", safeErrorCategory(error));
       return res.status(503).json({ error: "Your conversation could not be saved. Please retry." });
     }
   }
@@ -1288,7 +1291,7 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
       await runGroq();
     } catch (error: any) {
       if (!res.destroyed && !clientDisconnected) {
-        console.error("Chat provider request failed.", error);
+        console.error("Chat provider request failed.", safeErrorCategory(error));
         res.write(`data: ${JSON.stringify({ error: "The AI service could not complete this response. Please retry." })}\n\n`);
       }
     }
@@ -1300,7 +1303,7 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
       });
       await prisma.conversation.update({ where: { id }, data: { updatedAt: new Date() } });
     } catch (error) {
-      console.error("Could not persist assistant response:", error);
+      console.error("Could not persist assistant response:", safeErrorCategory(error));
       res.write(`data: ${JSON.stringify({ error: "The response was generated but could not be saved." })}\n\n`);
     }
   }
@@ -1310,7 +1313,7 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
   }
   if (authenticatedUser && prisma && preference?.learning && !containsSensitiveSecret(`${message}\n${assistantFull}`)) {
     void updateConversationSummary(authenticatedUser.id, id).catch(error => {
-      console.error("Could not update conversation memory summary:", error);
+      console.error("Could not update conversation memory summary:", safeErrorCategory(error));
     });
   }
 });
@@ -1485,18 +1488,18 @@ app.post("/api/chat/search", researchRateLimit, async (req, res) => {
         });
       }
     } catch (error) {
-      console.error("Could not save researched conversation:", error);
+      console.error("Could not save researched conversation:", safeErrorCategory(error));
       return res.status(503).json({ error: "The researched response could not be saved." });
     }
     try {
       const preference = await prisma.userPreference.findUnique({ where: { userId: user.id }, select: { learning: true } });
       if (preference?.learning) {
         void updateConversationSummary(user.id, conversationId).catch(error => {
-          console.error("Could not update researched conversation summary:", error);
+          console.error("Could not update researched conversation summary:", safeErrorCategory(error));
         });
       }
     } catch (error) {
-      console.error("Could not check researched conversation memory preference:", error);
+      console.error("Could not check researched conversation memory preference:", safeErrorCategory(error));
     }
   }
   res.json({ answer, sources, conversationId });
@@ -1522,7 +1525,7 @@ app.post("/api/images/search", imageSearchRateLimit, async (req, res) => {
       });
       query = (completion.choices[0]?.message?.content || query).trim().replace(/^["']|["']$/g, "").slice(0, 180) || query;
     } catch (error) {
-      console.error("Image search query normalization failed; using the original subject.", error);
+      console.error("Image search query normalization failed; using the original subject.", safeErrorCategory(error));
     }
   }
   try {
@@ -1563,7 +1566,7 @@ app.post("/api/images/search", imageSearchRateLimit, async (req, res) => {
     }).sort((a, b) => b.relevance - a.relevance).slice(0, 4).map(({ relevance: _relevance, ...image }) => image);
     return res.json({ query, images });
   } catch (error: any) {
-    console.error("Relevant image search failed.", error);
+    console.error("Relevant image search failed.", safeErrorCategory(error));
     return res.status(502).json({ error: "Relevant image search is temporarily unavailable. Please try again." });
   }
 });
@@ -1630,7 +1633,7 @@ app.post("/api/images/generate", imageGenerationRateLimit, requirePersistentFile
       });
       enhancedPrompt = completion.choices[0]?.message?.content?.trim() || prompt;
     } catch (error) {
-      console.error("Image prompt enhancement failed; using the original prompt.", error);
+      console.error("Image prompt enhancement failed; using the original prompt.", safeErrorCategory(error));
     }
   }
   const finalPrompt = [enhancedPrompt, styleDescriptions[stylePreset] || "", ratioDescription[aspectRatio] || ""].filter(Boolean).join(", ").slice(0, 2048);
@@ -1643,12 +1646,12 @@ app.post("/api/images/generate", imageGenerationRateLimit, requirePersistentFile
       signal: AbortSignal.timeout(120000)
     });
   } catch (error) {
-    console.error("Cloudflare Workers AI image request failed.", error);
+    console.error("Cloudflare Workers AI image request failed.", safeErrorCategory(error));
     return res.status(502).json({ error: "Image generation could not reach Cloudflare. Please try again." });
   }
   if (!response.ok) {
     const detail = (await response.text().catch(() => "")).slice(0, 400);
-    console.error("Cloudflare Workers AI returned HTTP", response.status, detail);
+    console.error("Cloudflare Workers AI returned HTTP", response.status);
     return res.status(response.status >= 500 ? 502 : response.status).json({
       error: response.status === 401 || response.status === 403
         ? "Cloudflare rejected the Workers AI token. Check that the token has Workers AI Read permission and the Account ID is correct."
@@ -1766,7 +1769,7 @@ app.post("/api/upload", uploadRateLimit, upload.array("files", 10), async (req, 
         await prisma.storedFile.deleteMany({ where: { id } }).catch(() => undefined);
       }
       for (const file of rawFiles) await fs.promises.unlink(path.join(uploads, file.filename)).catch(() => undefined);
-      console.error("Could not persist uploaded files.", error);
+      console.error("Could not persist uploaded files.", safeErrorCategory(error));
       return res.status(503).json({ error: "The files could not be safely saved. Please try again." });
     }
   } else if (user && prisma && databaseReady) {
@@ -1781,7 +1784,7 @@ app.post("/api/upload", uploadRateLimit, upload.array("files", 10), async (req, 
     } catch (error) {
       for (const id of savedIds) await prisma.storedFile.deleteMany({ where: { id, userId: user.id } }).catch(() => undefined);
       for (const file of rawFiles) await fs.promises.unlink(path.join(uploads, file.filename)).catch(() => undefined);
-      console.error("Could not persist uploaded files.", error);
+      console.error("Could not persist uploaded files.", safeErrorCategory(error));
       return res.status(503).json({ error: "The files could not be safely saved. Please try again." });
     }
   }
@@ -1880,7 +1883,7 @@ async function generateStructuredContent(prompt: string, topic: string, format: 
     });
     raw = response.choices[0]?.message?.content || "";
   } catch (error) {
-    console.error("AI file generation request failed.", error);
+    console.error("AI file generation request failed.", safeErrorCategory(error));
     throw generationError(502, "The AI provider could not generate this file. Check the provider configuration and try again.");
   }
   try {
@@ -1900,7 +1903,7 @@ async function generateStructuredContent(prompt: string, topic: string, format: 
     }
     return json;
   } catch (error) {
-    console.error("AI provider returned invalid structured file content.", error);
+    console.error("AI provider returned invalid structured file content.", safeErrorCategory(error));
     throw generationError(502, "The AI provider returned an invalid file draft. Please try again.");
   }
 }
@@ -2108,7 +2111,7 @@ app.post("/api/documents/export", documentRateLimit, async (req, res) => {
     res.setHeader("Content-Length", bytes.length);
     return res.send(bytes);
   } catch (error) {
-    console.error("Document export failed.", error);
+    console.error("Document export failed.", safeErrorCategory(error));
     return res.status(500).json({ error: "The document could not be exported. Please try again." });
   }
 });
@@ -2200,7 +2203,7 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
     return res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? "Each file must be 25 MB or smaller." : "The upload could not be accepted. Attach up to 10 files at a time." });
   }
   const status = error && typeof error === "object" && "status" in error ? Number(error.status) : 500;
-  console.error("Unhandled request error:", error);
+  console.error("Unhandled request error:", safeErrorCategory(error));
   res.status(status >= 400 && status < 600 ? status : 500).json({ error: status === 413 ? "The request is too large." : "The request could not be completed." });
 });
 
