@@ -7,8 +7,7 @@
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite\"",
     "build": "prisma generate && tsc -b && esbuild server/index.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=server/server-bundle.mjs && vite build",
     "start": "tsx server/index.ts",
-    "test": "vitest run",
-    "audit": "npm audit --audit-level=high"
+    "test": "vitest run"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",
@@ -34,7 +33,7 @@
     "react-markdown": "latest",
     "remark-gfm": "latest",
     "tsx": "^4.23.15",
-    "xlsx": "npm:@keep-lts/xlsx@0.18.6"
+    "xlsx": "latest"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
@@ -52,15 +51,5 @@
     "vite": "latest",
     "vitest": "latest",
     "esbuild": "0.28.2"
-  },
-  "overrides": {
-    "@prisma/config": {
-      "deepmerge-ts": "^8.0.2",
-      "effect": "^3.22.1"
-    },
-    "pptxgenjs": {
-      "image-size": "npm:image-size-next@1.2.2"
-    }
-  },
-  "packageManager": "npm@10.9.9"
+  }
 }

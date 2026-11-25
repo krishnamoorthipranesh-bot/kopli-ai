@@ -1,57 +1,39 @@
 # KOPLI AI
 
-KOPLI AI is a responsive AI assistant and workspace.
-
-## Production architecture
-
-- **Frontend and backend API:** Vercel (Vite/React + Express serverless handler)
-- **Database:** Supabase PostgreSQL through Prisma
-- **Persistent files:** private Supabase Storage bucket `kopli-user-files`
-- **AI chat and vision:** Groq
-- **Image generation:** Cloudflare Workers AI
-- **Web research:** Tavily
-- **Email:** Resend, optional and dependent on a verified sender
-
-Render-specific files are retained only as historical rollback artifacts. They are not part of the production request path.
+KOPLI AI is a responsive AI assistant created and owned by Pranesh KK.
 
 ## Run locally
 
-1. Install Node.js 22 or newer.
-2. Install dependencies with `npm install --include=dev`.
-3. Copy `.env.example` to `.env` and configure local/server-only values.
-4. Start the app with `npm run dev`.
-5. Open http://localhost:5173. The Express API runs on http://localhost:8787.
+1. Install Node.js 20 or newer.
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Copy `.env.example` to `.env`.
+4. Add provider keys only to the backend `.env` file.
+5. Start the application:
+   ```bash
+   npm run dev
+   ```
+6. Open `http://localhost:5173`.
 
-## Environment variables
+The Express API runs on `http://localhost:8787`.
 
-Required for the complete production experience:
-- `DATABASE_URL`: Supabase PostgreSQL connection string for Prisma.
-- `GROQ_API_KEY`: Groq chat and vision requests.
-- `GROQ_MODEL`, `GROQ_VISION_MODEL`: optional model overrides.
-- `SESSION_SECRET`: random server-side session signing secret.
-- `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`: server-side Supabase Storage access.
-- `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`: Cloudflare Workers AI image generation.
-- `TAVILY_API_KEY`: optional live web research.
+## Demo mode
 
-Optional:
-- `SUPABASE_STORAGE_BUCKET`: defaults to `kopli-user-files`.
-- `RESEND_API_KEY` and `EMAIL_FROM` (or `RESEND_FROM_EMAIL`): password recovery email delivery. Resend must accept the configured sender.
-- `APP_URL`: defaults to https://kopli-ai.vercel.app/.
-- `ALLOWED_ORIGINS`: comma-separated additional browser origins.
-- `KOPLI_OWNER_EMAIL`, `KOPLI_ADMIN_SECRET`: owner/admin configuration.
-- `PORT`: local Express port, defaults to 8787.
+With no provider keys configured, chat works in clearly labeled demo mode. Search, image, and Groq responses are never simulated as successful external-provider results.
 
-Never use a `VITE_` prefix for server secrets. Never put service-role keys, database URLs, API tokens, or session secrets in browser code.
+## Provider environment variables
 
-## File persistence behavior
+- `GROQ_API_KEY`: Groq text generation
+- `GROQ_VISION_MODEL`: optional Groq vision model override; defaults to `qwen/qwen3.8-27b`
+- `TAVILY_API_KEY`: real-time web search
+- `STABILITY_API_KEY`: Stability text-to-image
+- `DATABASE_URL`: PostgreSQL/Prisma persistence for accounts, sessions, conversations, and saved files
+- `RESEND_API_KEY` and `RESEND_FROM_EMAIL`: account verification and password recovery email delivery; the sender must be verified with Resend. `EMAIL_FROM` is accepted as a legacy sender variable.
+- `APP_URL`: public app origin used in verification and password recovery links; defaults to the production site
+- `PORT`: backend port, default `8787`
 
-Vercel's local filesystem is temporary. Uploads and generated files must be stored in the private Supabase Storage bucket with metadata in PostgreSQL. If the Storage service credential is absent, file uploads and file generation return an explicit unavailable response instead of pretending a temporary file is durable.
+## Render free-service wake-up
 
-## Verification
-
-Run:
-```bash
-npm test
-npx tsc --noEmit
-npm run build
-```
+The `Keep KOPLI AI available` GitHub Actions workflow requests the primary Render health endpoint every five minutes. This helps prevent the free web service from idling between visits. GitHub schedule runs can be delayed, and Render can still restart free instances, so this reduces cold starts but cannot guarantee zero loading screens. The workflow targets only `kopli-ai-1.onrender.com`.
