@@ -7,6 +7,10 @@
     {
       "source": "/api/:path*",
       "destination": "/api/handler?__originalPath=/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ],
   "installCommand": "npm install --include=dev"
