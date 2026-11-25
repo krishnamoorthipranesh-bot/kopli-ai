@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { deflateRawSync } from "node:zlib";
-import { extractTextFromZipArchive, isAllowedOrigin } from "./index.js";
+import { extractTextFromZipArchive, isAllowedOrigin, shouldRejectEphemeralFileStorage } from "./index.js";
 import { containsSensitiveSecret, isPastContextQuery, memoryKeywords } from "./memory-utils.js";
+
+describe("Vercel file persistence safety", () => {
+  it("rejects permanent file writes on Vercel when Supabase Storage is unavailable", () => {
+    expect(shouldRejectEphemeralFileStorage(true, false)).toBe(true);
+  });
+
+  it("allows Vercel file writes only when persistent storage is configured", () => {
+    expect(shouldRejectEphemeralFileStorage(true, true)).toBe(false);
+  });
+
+  it("keeps local development file storage available", () => {
+    expect(shouldRejectEphemeralFileStorage(false, false)).toBe(false);
+  });
+});
 
 describe("origin and CORS security", () => {
   it("allows requests with no origin header (same-origin / curl / server)", () => {
