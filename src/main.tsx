@@ -1678,12 +1678,12 @@ function App() {
               </div>}
               {toolType === "image" && <label className="explore-field"><span>Negative prompt <small>(optional · things to avoid)</small></span><input className="chat-search" value={toolNegativePrompt} onChange={event => setToolNegativePrompt(event.target.value)} maxLength={500} placeholder="blurry, extra fingers, text, watermark…" /></label>}
               {toolType === "edit" && <div className="explore-field">
-                <span>Upload image <small>(PNG, JPEG, or WebP · max 8 MB)</small></span>
+                <span>Upload image <small>(PNG, JPEG, or WebP · max 3 MB)</small></span>
                 <input className="chat-search" type="file" accept="image/png,image/jpeg,image/webp" onChange={event => {
                   const file = event.currentTarget.files?.[0];
                   if (!file) { setToolEditFile(null); setToolEditPreview(""); return; }
-                  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 8 * 1024 * 1024) {
-                    setNotice("Choose a PNG, JPEG, or WebP image smaller than 8 MB.");
+                  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 3 * 1024 * 1024) {
+                    setNotice("Choose a PNG, JPEG, or WebP image smaller than 3 MB.");
                     event.currentTarget.value = "";
                     setToolEditFile(null);
                     setToolEditPreview("");
