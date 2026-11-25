@@ -2204,13 +2204,18 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
   res.status(status >= 400 && status < 600 ? status : 500).json({ error: status === 413 ? "The request is too large." : "The request could not be completed." });
 });
 
-app.get(["/health", "/api/health"], (_req, res) => {
-  const ready = databaseStatus === "ready";
+// Liveness endpoint: keep the SPA's lightweight connectivity check independent
+// from optional/degraded persistence features.
+app.get("/health", (_req, res) => res.status(200).json({ status: "ok", live: true }));
+
+// Readiness endpoint: database and durable file storage must both be available.
+app.get("/api/health", (_req, res) => {
+  const databaseReadyNow = databaseStatus === "ready";
   const fileStorageReady = !shouldRejectEphemeralFileStorage(Boolean(process.env.VERCEL), persistentStorageConfigured());
-  const status = ready && fileStorageReady ? "ok" : "degraded";
-  return res.status(ready && fileStorageReady ? 200 : 503).json({
-    status,
-    ready: ready && fileStorageReady,
+  const ready = databaseReadyNow && fileStorageReady;
+  return res.status(ready ? 200 : 503).json({
+    status: ready ? "ok" : "degraded",
+    ready,
     persistence: databaseStatus,
     fileStorage: fileStorageReady ? "persistent" : "temporary",
     fileStorageConfigured: fileStorageReady
