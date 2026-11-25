@@ -1,48 +1,30 @@
-# KOPLI AI – Security Audit & Vulnerability Assessment
+# KOPLI AI – Security Audit (2026-11-25)
 
-## 1. Executive Summary
+## Scope and confidence
 
-A comprehensive security audit of **KOPLI AI** was conducted across frontend source, backend API routes, authentication pipelines, session handlers, file upload processors, database query interfaces, and third-party dependencies.
+Reviewed the current Vercel/Supabase code path, authentication handlers, file persistence adapter, CI workflows, dependency lockfile, Supabase database metadata, and Vercel project environment-variable names. This is a source/configuration audit, not an independent penetration test or physical-device QA.
 
-Overall Status: **SECURE & HARDENED FOR PRODUCTION DEPLOYMENT**.
+## Verified controls
 
----
+- **Authentication hardening in PR #15:** new registrations require email verification before sign-in; owner role assignment occurs only after the configured owner email is verified. Existing production accounts/data were not changed by this branch.
+- **Sessions:** server-side session records are stored in PostgreSQL; session tokens are random and stored hashed. Cookies are HTTP-only, SameSite=Lax, and Secure in production.
+- **Password handling:** passwords are hashed with bcryptjs; plaintext passwords are not stored.
+- **Authorization:** protected data routes resolve the authenticated user and use user-scoped Prisma queries in the reviewed paths. Continue regression testing every route before production release.
+- **HTTP protections:** Helmet security headers, origin allowlisting, JSON request-size limit, and express-rate-limit are configured.
+- **Uploads:** upload size/type checks and archive text extraction protections are present. File content must be persisted to durable storage in serverless production.
+- **CI supply-chain controls:** checkout credentials are not persisted and workflows use read-only repository permissions. Dependency audit is a required CI step.
+- **Dependency audit:** the current lockfile passes `npm audit --audit-level=high` with **0 reported vulnerabilities** in the latest successful CI run.
+- **Supabase database:** RLS is enabled on the 14 public tables. No grants to anon/authenticated/PUBLIC and no public-schema policies were found. Supabase reports 14 informational `rls_enabled_no_policy` notices; this is intentional only while all database access is through the trusted server-side Prisma connection. Do not expose the service database credential to clients.
+- **Supabase Storage:** the `kopli-user-files` bucket is private.
 
-## 2. Security Controls & Audit Checklist
+## Release blockers / required actions
 
-| Security Control | Implementation Method | Assessment Result |
-|---|---|---|
-| **API Key Protection** | Stored strictly in backend environment variables (`process.env`). Never exposed to frontend code or browser network payloads. | **VERIFIED** |
-| **Password Security** | Passwords hashed using `bcryptjs` with salt round cost factor 12. Plaintext passwords never stored or logged. Minimum length requirement of 12 characters enforced on registration. | **VERIFIED** |
-| **Session Security** | Sessions managed via custom cryptographically signed tokens (`id.signature.expiresAt`) using HMAC-SHA256 with `SESSION_SECRET`. Delivered via HTTP-only cookies with `SameSite=Lax` and `Secure` in production. | **VERIFIED** |
-| **Admin Authorization** | Dual-check verification requiring both a verified session role of `owner` and email match against `KOPLI_OWNER_EMAIL`. Protected endpoints (`/api/admin/status`, `/api/admin/users`) enforce server-side validation. | **VERIFIED** |
-| **CORS & Origin Validation** | Dynamic origin validation (`isAllowedOrigin`) strictly permitting localhost development, Render production URLs (`*.onrender.com`, `RENDER_EXTERNAL_URL`), same-host requests, and `ALLOWED_ORIGINS`. Foreign cross-origin requests are blocked with HTTP 403. | **VERIFIED** |
-| **SQL Injection Defense** | All database operations use Prisma ORM with parameterized queries and strongly-typed models. Raw unparameterized SQL queries are prohibited. | **VERIFIED** |
-| **Cross-Site Scripting (XSS)** | React JSX automatically escapes dynamic expressions. Markdown is rendered via `react-markdown` with `remark-gfm` without raw HTML injection enabled (`rehype-raw` is omitted). | **VERIFIED** |
-| **HTTP Security Headers** | `helmet` configured with Content Security Policy (CSP), `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, and strict `Permissions-Policy`. | **VERIFIED** |
-| **File Upload Hardening** | 25MB file limit, maximum 10 files. Strict MIME type whitelist and binary magic bytes validation (PNG `89 50 4E 47`, JPEG `FF D8 FF`, WebP `RIFF...WEBP`, PDF `%PDF`, Office OpenXML `50 4B 03 04`). Files with mismatched signatures are immediately unlinked and rejected. | **VERIFIED** |
-| **Sensitive Path Shielding** | Middleware blocks access to sensitive server assets (`/.env`, `/.git`, `/server/`, `/prisma/`, `/package.json`, `/package-lock.json`, `/node_modules/`) with immediate HTTP 404. | **VERIFIED** |
-| **Prompt Secret Leak Prevention**| `containsSensitiveSecret()` scans prompts and summaries for API keys, bearer tokens, private keys, database URLs, and passwords, blocking them from being committed into user memory. | **VERIFIED** |
-| **Rate Limiting** | `express-rate-limit` enforces a ceiling of 120 requests per minute per IP address. | **VERIFIED** |
+1. **Durable storage credential missing:** Vercel Production has `SUPABASE_URL` but does not have `SUPABASE_SERVICE_ROLE_KEY`. The branch now fails closed for file writes on Vercel when durable storage is unavailable and exposes `/api/health` readiness separately from `/health` liveness. Add the service-role key directly as an encrypted server-only Vercel variable before enabling file uploads in production. Never put it in client code or Git.
+2. **Credential-shaped environment variable names:** three malformed Production variable names contain strings resembling Resend, Cloudflare, and Groq credentials. Treat the corresponding credentials as exposed: rotate them with their providers, create correctly named variables, then remove the malformed Vercel entries. Do not copy their names or values into tickets, logs, or source control.
+3. **Preview isolation:** existing Preview secrets are attached to older Git branches. The new audit branch cannot be fully authenticated/AI-smoke-tested until suitable Preview variables are configured.
+4. **Legacy file metadata:** 19 existing StoredFile records were identified with local/temporary paths (10 under `/tmp`, 9 other absolute paths). Their original file bytes have not been migrated or deleted. Reconcile each source before cleanup; do not assume those files are recoverable.
+5. **Additional assurance:** Android physical-device QA and independent penetration/load testing remain outstanding.
 
----
+## Release decision
 
-## 3. Dependency Vulnerability Review
-
-`npm audit` reports 7 high-severity transitive vulnerabilities located in:
-1. `image-size` (inside `pptxgenjs`): ReDoS / loop parser issue in JXL/HEIF/ICNS.
-   - *Impact Analysis*: KOPLI AI uses PowerPoint generation for text and bullet slides; arbitrary untrusted image file parsing in PPTX is not invoked.
-2. `deepmerge-ts` / `effect` (inside `prisma` CLI development config).
-   - *Impact Analysis*: CLI build-time tooling only, does not execute during production runtime.
-3. `xlsx` (SheetJS prototype pollution / ReDoS).
-   - *Impact Analysis*: KOPLI AI only reads user-uploaded Excel sheets via `sheet_to_csv` for text extraction.
-
-*Recommendation*: Avoid `npm audit fix --force` as it causes breaking API incompatibilities across `pptxgenjs` and `prisma`. Current protections (file signature validation, file size limits, rate limiting) provide effective defense-in-depth.
-
----
-
-## 4. Production Secret Management
-
-- Secrets must be entered in the Render Dashboard Environment tab.
-- Never commit `.env` or paste live API keys into repository files.
-- `render.yaml` specifies `sync: false` for all external API keys so secrets are never pushed to GitHub.
+**Do not merge/deploy PR #15 to Production yet.** The code branch and preview build pass automated CI, but the missing storage secret, malformed credential entries, and unverified legacy file records must be addressed first. Production remains on its existing deployment until a controlled cutover is approved and smoke-tested.
