@@ -1,27 +1,34 @@
 # KOPLI AI project workflow
 
 ## Project identity
-- Official repository: `krishnamoorthipranesh-bot/kopli-ai`.
-- Production branch: `master`.
-- Production site: `https://kopli-ai.vercel.app`.
-- Hosting: Vercel frontend and serverless API; Supabase PostgreSQL and private Storage.
-- Render is retired from the target architecture. Never add Render URLs, workflows, or deployment configuration.
 
-## Change workflow
-1. Inspect current source, branch, Vercel deployment config, required environment variables, and relevant tests.
-2. Preserve branding, authentication, stored data, and working features unless explicitly requested.
-3. Keep all credentials in server-side environment variables. Never commit or expose secrets.
-4. Run tests, lint, TypeScript, production build, and `git diff --check`; fix failures and rerun.
-5. Review changes and open a pull request to `master`.
-6. Deploy to Vercel Preview, verify API health and core flows, then promote to Production only when safe.
-7. Verify the Production deployment commit SHA and live routes before reporting success.
+- This repository is the official KOPLI AI project: `krishnamoorthipranesh-bot/kopli-ai`.
+- The deployment branch is `master`; verify the repository's current default branch before changing it.
+- The primary live site is `https://kopli-ai-1.onrender.com`.
+- The primary Render service is `kopli-ai-1`. Check the Render workspace and service before using them.
+- Do not confuse this project with another KOPLI-branded application.
 
-## Database and hosting safety
-- Supabase is the production source of truth. Do not change database providers, migrate records, or delete data without a verified recovery path.
-- Do not stop any legacy service until Vercel Production API, authentication, chat, AI providers, and persistent Storage are verified.
-- Do not enable paid plans or services without explicit approval.
-- Do not ask users to paste secrets into chat.
+## When the user requests a code or feature update
+
+1. Inspect the current source, repository status, branch, deployment configuration, and relevant tests before editing.
+2. Modify the existing application. Preserve KOPLI branding, current navigation, authentication, stored data, and working features unless the user asks otherwise.
+3. Keep secrets in server-side environment variables. Never put credentials in source, examples, logs, commits, or chat. If a credential appears in a pasted prompt or code, treat it as exposed and recommend rotation.
+4. Run the repository's test command and production build after code changes. Fix failures and rerun them. Also run `git diff --check`.
+5. Commit the reviewed changes locally after verification.
+6. Recheck GitHub write and push permissions. Push to `master` only when authorized write access is available; do not try to bypass a read-only connection. If blocked, keep the verified local commit and tell the user the exact permission needed.
+7. When a push succeeds, wait for the primary Render service to finish deploying that commit. Verify the deploy status and commit SHA, then check `/health`, `/api/status`, and the live site at the URL above. Report only results observed from those checks.
+
+## Database and deployment safety
+
+- Preserve the user's selected production database. Do not switch providers, migrate records, delete data, or change production database URLs until the current source of truth and recovery path are verified.
+- Do not apply Render Blueprint changes or production environment changes as a substitute for inspecting their actual effect.
+- Check service branch, Auto-Deploy, current deployment, and required environment variable names before reporting deployment readiness.
+- If a provider integration hides credentials or cannot link a database directly, explain that limitation and provide the supported secure connection path. Do not ask the user to paste a secret into chat.
+- Do not enable paid plans or services without the user's explicit approval.
 
 ## Reporting
-- Distinguish code changes, CI, Preview deployment, Production deployment, and live-provider tests.
-- Never claim deployment or verification without evidence.
+
+- State separately whether GitHub read, write, commit, and push are available.
+- State Render access, Auto-Deploy, and live verification separately.
+- Distinguish local tests/build from live-provider tests and production checks.
+- Never report a push, deployment, API connection, or live verification without evidence.
