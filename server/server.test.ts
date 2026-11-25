@@ -16,9 +16,8 @@ describe("origin and CORS security", () => {
     expect(isAllowedOrigin("https://localhost:5173")).toBe(true);
   });
 
-  it("allows onrender.com subdomains for production deployment", () => {
-    expect(isAllowedOrigin("https://kopli-ai.onrender.com")).toBe(true);
-    expect(isAllowedOrigin("https://my-kopli-service.onrender.com")).toBe(true);
+  it("blocks unconfigured onrender.com subdomains", () => {
+    expect(isAllowedOrigin("https://my-kopli-service.onrender.com")).toBe(false);
   });
 
   it("allows same-host origin based on host header", () => {
