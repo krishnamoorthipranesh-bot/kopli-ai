@@ -1045,7 +1045,7 @@ app.post("/api/chat", async (req, res) => {
   res.write(`data: ${JSON.stringify({ conversationId: id })}\n\n`);
 
   let assistantFull = "";
-  if (!groq && !geminiConfigured) {
+  if (!groq) {
     const text = demoReply(message);
     assistantFull = text;
     for (const word of text.split(/(\s+)/)) {
