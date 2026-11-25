@@ -1292,3 +1292,27 @@
   .composer-mode { max-width: 84px !important; }
   .composer-toolbar-left,.composer-toolbar-right { gap: 1px !important; }
 }
+
+.document-preview-text {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: clamp(18px,4vw,42px);
+  overflow: auto;
+  color: #202b3d;
+  background: #fff;
+  font: 13px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+.document-preview-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid rgba(70,100,160,.18);
+  border-top-color: #3978ff;
+  border-radius: 50%;
+  animation: kopli-preview-spin .8s linear infinite;
+}
+@keyframes kopli-preview-spin { to { transform: rotate(360deg); } }
