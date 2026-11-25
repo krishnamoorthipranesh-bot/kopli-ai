@@ -866,7 +866,7 @@
   display: block !important;
   flex: 1 1 auto !important;
   width: 100% !important;
-  height: 52px !important;
+  height: auto;
   min-height: 34px !important;
   max-height: 160px !important;
   padding: 5px 7px !important;
