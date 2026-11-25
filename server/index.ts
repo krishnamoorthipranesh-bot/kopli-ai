@@ -144,6 +144,9 @@ function persistentObjectPath(userId: string, kind: string, id: string, name: st
 }
 async function saveUserFile(args: { id: string; userId: string; name: string; mimeType: string; bytes: Buffer; kind: string; localPath: string }) {
   if (!prisma) throw new Error("File metadata database is unavailable.");
+  if (process.env.VERCEL && !persistentStorageConfigured()) {
+    throw new Error("Persistent file storage is not configured. Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel before saving files.");
+  }
   let storedPath = args.localPath;
   if (process.env.VERCEL && persistentStorageConfigured()) {
     const objectPath = persistentObjectPath(args.userId, args.kind, args.id, args.name);
@@ -1702,6 +1705,10 @@ app.get("/api/images/:imageId", async (req, res) => {
 app.post("/api/upload", uploadRateLimit, upload.array("files", 10), async (req, res) => {
   const user = await currentUser(req);
   const rawFiles = req.files as Express.Multer.File[] || [];
+  if (process.env.VERCEL && !persistentStorageConfigured()) {
+    for (const file of rawFiles) await fs.promises.unlink(path.join(uploads, file.filename)).catch(() => undefined);
+    return res.status(503).json({ error: "Persistent file storage is not configured. Uploads are temporarily unavailable until Supabase Storage is connected." });
+  }
   const files = rawFiles.flatMap(file => {
     const filePath = path.join(uploads, file.filename);
     if (!hasValidFileSignature(filePath, file.mimetype)) return [];
@@ -2191,9 +2198,9 @@ app.get(["/health", "/api/health"], (_req, res) => {
   const ready = databaseStatus === "ready";
   const fileStorageReady = !process.env.VERCEL || persistentStorageConfigured();
   const status = ready && fileStorageReady ? "ok" : "degraded";
-  return res.status(ready ? 200 : 503).json({
+  return res.status(ready && fileStorageReady ? 200 : 503).json({
     status,
-    ready,
+    ready: ready && fileStorageReady,
     persistence: databaseStatus,
     fileStorage: fileStorageReady ? "persistent" : "temporary",
     fileStorageConfigured: fileStorageReady
