@@ -838,6 +838,7 @@ const imageSearchRateLimit = createCostLimiter(60 * 1000, 20, "Image search limi
 const imageGenerationRateLimit = createCostLimiter(15 * 60 * 1000, 5, "Image generation limit reached. Please wait 15 minutes before generating more images.");
 const uploadRateLimit = createCostLimiter(15 * 60 * 1000, 20, "Upload limit reached. Please wait before uploading more files.");
 const fileAnalysisRateLimit = createCostLimiter(15 * 60 * 1000, 12, "File analysis limit reached. Please wait before analyzing more documents.");
+const filePreviewRateLimit = createCostLimiter(15 * 60 * 1000, 12, "Document preview limit reached. Please wait before opening more previews.");
 const requirePersistentFileStorage: express.RequestHandler = (_req, res, next) => {
   if (process.env.VERCEL && !persistentStorageConfigured()) {
     return res.status(503).json({ error: "Persistent file storage is not configured. Configure Supabase Storage in Vercel before generating or saving files." });
@@ -2124,7 +2125,7 @@ app.post("/api/documents/generate", documentRateLimit, requirePersistentFileStor
 app.post("/api/presentations/generate", documentRateLimit, requirePersistentFileStorage, generateFile);
 app.post("/api/pdf/generate", documentRateLimit, requirePersistentFileStorage, generateFile);
 
-app.get("/api/files/:fileName/preview", async (req, res) => {
+app.get("/api/files/:fileName/preview", filePreviewRateLimit, async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to preview files." });
   if (!prisma) return res.status(503).json({ error: "File metadata database is unavailable." });
