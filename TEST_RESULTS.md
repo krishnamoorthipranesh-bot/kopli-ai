@@ -22,6 +22,14 @@ The CI workflow runs:
 ## Dependency audit details
 The successful CI run's npm audit inventory reported 7 high-severity vulnerabilities, 0 critical, 0 moderate, and 0 low. Affected packages include `@prisma/config`, `deepmerge-ts`, `effect`, `prisma`, `image-size`, `pptxgenjs`, and `xlsx`. The Prisma/PptxGenJS fixes cross major versions and `xlsx` has no npm fix. The audit step is explicitly non-blocking; do not interpret the green build as a clean security audit.
 
+
+## Latest verified CI run
+- Head commit: `6f0e40c8309a05db1cf1dcdafbf384c7fc729634`
+- GitHub Actions run: [45552436857](https://github.com/krishnamoorthhipranesh-bot/kopli-ai/actions/runs/45552436857)
+- Result: PASS; build job completed successfully (lint, TypeScript, tests, production build included by workflow).
+- The dependency audit is still informational and reported 7 high-severity findings in the audit inventory.
+- A Vercel Preview for this exact head and real visual/mobile QA remain unverified.
+
 ## Not yet verified for this branch
 No passing CI run or Vercel Preview deployment is claimed until GitHub Actions and Vercel report success for this exact branch commit.
 
