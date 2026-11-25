@@ -981,3 +981,6 @@
 }
 .sidebar .history-actions,
 .sidebar details[open] > *:not(summary) { display: none !important; }
+
+/* Keep the three-dot workspace actions available on dashboard and tool pages too. */
+.main[data-section]:not([data-section="Chat"]) .chat-floating-actions { display: flex !important; }
