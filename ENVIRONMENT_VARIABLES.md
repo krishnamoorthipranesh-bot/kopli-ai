@@ -15,6 +15,9 @@ This document lists all environment variables utilized by the **KOPLI AI** backe
 | `TAVILY_API_KEY` | Optional (Activates live search) | `tvly-...` | API key from Tavily to enable real-time internet search and citation retrieval. |
 | `STABILITY_API_KEY` | Optional (Activates image gen) | `sk-...` | API key from Stability AI to generate Stable Diffusion visual content in Explore mode. |
 | `DATABASE_URL` | Optional (Activates cloud DB) | `postgresql://user:pass@host:5432/db` | PostgreSQL connection string for user accounts, chat persistence, memory, and file metadata. |
+| `SUPABASE_URL` | Required for persistent file storage | `https://project-ref.supabase.co` | Supabase project URL used by the server-side Storage adapter. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Required for persistent file storage | Server-only secret | Server-side Storage access. Never expose this key in frontend code, browser storage, public logs or Git. |
+| `SUPABASE_STORAGE_BUCKET` | Optional | `kopli-user-files` | Existing private bucket for user uploads and generated files. |
 | `KOPLI_OWNER_EMAIL` | Recommended | `owner@example.com` | Email address designated as the administrator and project owner. Accounts matching this email receive the `owner` role automatically upon registration or login. |
 | `KOPLI_ADMIN_SECRET` | Recommended | 32+ char random hex string | Random secret key used for administrative verification and fallback session signing. Automatically generated in Render via `render.yaml`. |
 | `SESSION_SECRET` | Recommended | 32+ char random hex string | Cryptographic secret key used to sign and verify HMAC-SHA256 session cookies (`kopli_session`). Automatically generated in Render via `render.yaml`. |
@@ -25,7 +28,11 @@ This document lists all environment variables utilized by the **KOPLI AI** backe
 
 ---
 
-## 2. Default Fallback Behavior ("Demo Mode")
+## 2. Persistent file storage
+
+The Vercel deployment must have `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` configured as server-only Production and Preview environment variables. The existing `kopli-user-files` bucket is private. Without the service-role key, Vercel can only use temporary `/tmp` storage; the `/api/health` endpoint reports this as `fileStorageConfigured: false`. Never add the service-role key to a `VITE_` or `NEXT_PUBLIC_` variable.
+
+## 3. Default Fallback Behavior ("Demo Mode")
 
 KOPLI AI is designed with an active fallback layer:
 - If `GROQ_API_KEY` is omitted: The server answers with helpful setup guidance and identifies creator **Pranesh KK**.
