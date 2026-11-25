@@ -294,16 +294,34 @@ function MessageView({
       window.open(expandedImage.src, "_blank", "noopener,noreferrer");
     }
   }
+  const documentDownload = !isUser
+    ? message.content.match(/\[Download ([^\]]+\.(?:docx|pdf|pptx|xlsx))\]\(([^)]+)\)/i)
+    : null;
+  const visibleMessageContent = documentDownload
+    ? message.content.replace(/\n*\[Download [^\]]+\]\([^)]+\)/, "").trim()
+    : message.content;
+  async function shareDocument() {
+    if (!documentDownload) return;
+    const url = new URL(documentDownload[2], window.location.origin).href;
+    try {
+      if (navigator.share) await navigator.share({ title: documentDownload[1], url });
+      else { await navigator.clipboard.writeText(url); }
+    } catch (error) {
+      if (error instanceof Error && error.name !== "AbortError") {
+        try { await navigator.clipboard.writeText(url); } catch { /* Clipboard may be unavailable. */ }
+      }
+    }
+  }
   return (
     <article className={`message ${message.role}${message.streaming ? " streaming" : ""}`}>
       <div className="message-user-content">
         <div className="message-content">
-          {message.content
+          {visibleMessageContent
             ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
                 img: ({ src, alt }) => src
                   ? <button className="message-image-button" type="button" onClick={() => setExpandedImage({ src, alt: alt || "KOPLI AI image" })} aria-label="Open image full screen"><img src={src} alt={alt || "KOPLI AI image"} loading="lazy" /></button>
                   : null
-              }}>{message.content}</ReactMarkdown>
+              }}>{visibleMessageContent}</ReactMarkdown>
             : <div className="thinking-state" role="status"><span>Thinking</span></div>}
           {message.generationType && message.streaming && <div className="generation-card" role="status" aria-live="polite">
             <div className="generation-card-heading"><span className="generation-card-icon">{message.generationType === "image" ? <ImageIcon size={17} /> : <FileText size={17} />}</span><span>{message.progressLabel || (message.generationType === "image" ? "Creating your image" : "Creating your document")}</span><strong>{message.progress ?? 8}%</strong></div>
@@ -314,6 +332,18 @@ function MessageView({
             {message.sources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">[{index + 1}] {source.title || source.url}</a>)}
           </div>}
         </div>
+        {documentDownload && <section className="chat-document-card" aria-label="Generated document">
+          <div className="chat-document-top">
+            <span className="chat-document-icon"><FileText size={21} /></span>
+            <div className="chat-document-meta"><strong>{documentDownload[1]}</strong><span>{documentDownload[1].split(".").pop()?.toUpperCase() || "DOCUMENT"} · KOPLI AI</span></div>
+            <span className="chat-document-ready"><Check size={13} /> Ready</span>
+          </div>
+          <div className="chat-document-actions">
+            <a className="chat-document-download" href={documentDownload[2]} download={documentDownload[1]}><Download size={16} /> Download</a>
+            <a className="chat-document-secondary" href={documentDownload[2]} target="_blank" rel="noreferrer"><Eye size={16} /> Preview</a>
+            <button className="chat-document-secondary" type="button" onClick={() => void shareDocument()}><Share2 size={16} /> Share</button>
+          </div>
+        </section>}
           {!!message.attachments?.length && <div className="message-attachments" aria-label="Message attachments">
             {message.attachments.map((attachment, index) => attachment.previewUrl
               ? <button className="message-image-button" type="button" key={`${attachment.fileName}-${index}`} onClick={() => setExpandedImage({ src: attachment.previewUrl!, alt: attachment.fileName })} aria-label={`Open ${attachment.fileName} full screen`}><img src={attachment.previewUrl} alt={attachment.fileName} /></button>
