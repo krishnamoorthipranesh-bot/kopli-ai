@@ -27,13 +27,13 @@
     "multer": "latest",
     "pdf-parse": "1.1.1",
     "pdfkit": "latest",
-    "pptxgenjs": "latest",
+    "pptxgenjs": "4.0.0",
     "react": "latest",
     "react-dom": "latest",
     "react-markdown": "latest",
     "remark-gfm": "latest",
     "tsx": "^4.23.15",
-    "xlsx": "latest"
+    "exceljs": "^4.4.0"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
