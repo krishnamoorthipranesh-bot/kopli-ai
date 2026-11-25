@@ -22,7 +22,7 @@ const PptxGenJS = require("pptxgenjs");
 import rateLimit from "express-rate-limit";
 import mammoth from "mammoth";
 import pdfParse from "pdf-parse/lib/pdf-parse.js";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { tavily } from "@tavily/core";
 import { PrismaClient } from "@prisma/client";
 import helmet from "helmet";
@@ -1791,10 +1791,26 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
       text = parsed.value;
       method = "DOCX text extraction";
     } else if (mimeType.includes("spreadsheet") || /\.(xlsx|xls|csv)$/i.test(fileId)) {
-      const workbook = XLSX.read(fileBytes, { type: "buffer" });
-      text = workbook.SheetNames.map(name => {
-        const sheet = workbook.Sheets[name];
-        return `## ${name}\n${XLSX.utils.sheet_to_csv(sheet)}`;
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(fileBytes);
+      const cellText = (value: unknown): string => {
+        if (value === null || value === undefined) return "";
+        if (value instanceof Date) return value.toISOString();
+        if (typeof value === "object") {
+          const item = value as Record<string, unknown>;
+          if (typeof item.text === "string") return item.text;
+          if ("result" in item) return String(item.result ?? "");
+          if (Array.isArray(item.richText)) return item.richText.map(part => String((part as { text?: unknown }).text ?? "")).join("");
+          return JSON.stringify(value);
+        }
+        return String(value);
+      };
+      text = workbook.worksheets.map(sheet => {
+        const rows: string[] = [];
+        sheet.eachRow({ includeEmpty: false }, row => {
+          rows.push(row.values.slice(1).map(cellText).join("\t"));
+        });
+        return `## ${sheet.name}\n${rows.join("\n")}`;
       }).join("\n\n");
       method = "Spreadsheet text extraction";
     } else if (/\.txt|\.md|\.rtf|\.json|\.csv$/i.test(fileId) || ["text/plain","text/markdown","text/rtf","application/rtf","application/json","text/csv"].includes(mimeType)) {
@@ -1951,11 +1967,12 @@ async function generateFile(req: express.Request, res: express.Response) {
   try {
     if (format === "xlsx" || format === "xls") {
       const structured = await generateStructuredContent(prompt, topic, "xlsx") as any;
-      const workbook = XLSX.utils.book_new();
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet("Data");
       const rows = [structured.columns, ...structured.rows.slice(0, 100).map((row: unknown[]) => structured.columns.map((_: unknown, index: number) => String(row[index] ?? "").slice(0, 500)))];
-      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "Data");
+      worksheet.addRows(rows);
       const file = path.join(generated, `${id}.xlsx`);
-      const bytes = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
+      const bytes = Buffer.from(await workbook.xlsx.writeBuffer());
       fs.writeFileSync(file, bytes);
       await saveUserFile({ id, userId: user.id, name: `${id}.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes, kind: "document", localPath: file });
       return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Workbook.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", url: `/api/files/${id}.xlsx`, format: "XLSX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
