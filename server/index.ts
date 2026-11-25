@@ -53,7 +53,6 @@ app.use(helmet({
 export function isAllowedOrigin(origin?: string, hostHeader?: string): boolean {
   if (!origin) return true;
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
-  if (process.env.RENDER_EXTERNAL_URL && origin.toLowerCase() === process.env.RENDER_EXTERNAL_URL.toLowerCase()) return true;
   for (const vercelHost of [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]) {
     if (vercelHost && origin.toLowerCase() === `https://${vercelHost.toLowerCase()}`) return true;
   }
@@ -219,12 +218,12 @@ function databaseUnavailableMessage(feature: string) {
   try {
     const host = new URL(process.env.DATABASE_URL || "").hostname.toLowerCase().replace(/^\[|\]$/g, "");
     if (["localhost", "127.0.0.1", "::1"].includes(host)) {
-      return `${feature} is unavailable because DATABASE_URL points to a local loopback host. Configure a reachable PostgreSQL server in Render.`;
+      return `${feature} is unavailable because DATABASE_URL points to a local loopback host. Configure a reachable PostgreSQL server for Vercel.`;
     }
   } catch {
-    return `${feature} is unavailable because DATABASE_URL is invalid. Configure a valid PostgreSQL connection string in Render.`;
+    return `${feature} is unavailable because DATABASE_URL is invalid. Configure a valid PostgreSQL connection string in Vercel.`;
   }
-  return `${feature} is unavailable because the database connection failed. Check the PostgreSQL service and DATABASE_URL in Render.`;
+  return `${feature} is unavailable because the database connection failed. Check the Supabase PostgreSQL service and DATABASE_URL in Vercel.`;
 }
 
 async function createSession(userId: string, req: express.Request, res: express.Response) {
@@ -885,7 +884,7 @@ app.post("/api/auth/resend-verification", authRateLimit, async (req, res) => {
   const tokenHash = hashToken(token);
   await prisma.emailVerificationToken.deleteMany({ where: { userId: user.id } });
   await prisma.emailVerificationToken.create({ data: { userId: user.id, tokenHash, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
-  const verificationUrl = new URL("/", process.env.APP_URL || "https://kopli-ai-1.onrender.com");
+  const verificationUrl = new URL("/", process.env.APP_URL || "https://kopli-ai.vercel.app");
   verificationUrl.searchParams.set("verifyToken", token);
   const sent = await sendAccountEmail(
     user.email,
@@ -942,7 +941,7 @@ app.post("/api/auth/forgot-password", authRateLimit, async (req, res) => {
   const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
   await prisma.passwordResetToken.deleteMany({ where: { userId: user.id, expiresAt: { lte: new Date() } } });
   await prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash: hashToken(token), expiresAt } });
-  const appUrl = process.env.APP_URL || "https://kopli-ai-1.onrender.com";
+  const appUrl = process.env.APP_URL || "https://kopli-ai.vercel.app";
   const resetUrl = new URL("/", appUrl);
   resetUrl.searchParams.set("resetToken", token);
   try {
