@@ -16,7 +16,7 @@
   "installCommand": "npm install --include=dev",
   "functions": {
     "api/handler.ts": {
-      "includeFiles": "api/server-bundle.mjs"
+      "includeFiles": "server/server-bundle.mjs"
     }
   }
 }
