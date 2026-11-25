@@ -1323,3 +1323,105 @@
   animation: kopli-preview-spin .8s linear infinite;
 }
 @keyframes kopli-preview-spin { to { transform: rotate(360deg); } }
+
+
+/* Mobile composer regression guard: keep the text field and action bar
+   in separate rows so the attachment and mode controls never cover text. */
+@media (max-width: 900px) {
+  .composer-wrap {
+    z-index: 40;
+    width: calc(100% - 24px);
+    bottom: max(8px, env(safe-area-inset-bottom, 0px));
+    transform: translate(-50%, calc(-1 * var(--keyboard-inset, 0px)));
+  }
+  .composer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    min-height: 0;
+    padding: 9px;
+  }
+  .composer .composer-input {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    height: 42px;
+    min-height: 42px;
+    max-height: 132px;
+    padding: 6px 9px;
+  }
+  .composer-toolbar {
+    position: relative;
+    inset: auto;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    min-height: 36px;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: nowrap;
+    gap: 4px;
+  }
+  .composer-toolbar-left,
+  .composer-toolbar-right {
+    display: flex;
+    min-width: 0;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 4px;
+  }
+  .composer-mode-wrap { min-width: 0; flex: 0 1 auto; }
+  .composer-mode {
+    min-width: 72px;
+    max-width: 112px;
+    width: auto;
+    flex: 0 1 112px;
+  }
+  .composer-mode span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .composer .composer-mode-menu,
+  .attachment-menu {
+    z-index: 90;
+    max-height: min(60dvh, 420px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .messages { padding-bottom: 184px; }
+}
+@media (max-width: 600px) {
+  .composer-wrap { width: calc(100% - 14px); }
+  .composer { padding: 8px 7px; gap: 4px; border-radius: 18px; }
+  .composer .composer-input { height: 42px; min-height: 42px; padding: 5px 7px; }
+  .composer-toolbar-left,
+  .composer-toolbar-right { gap: 2px; }
+  .composer .composer-button,
+  .composer .send-button {
+    width: 34px;
+    min-width: 34px;
+    height: 34px;
+    min-height: 34px;
+    flex: 0 0 34px;
+  }
+  .composer-mode {
+    min-width: 64px;
+    max-width: 90px;
+    height: 34px;
+    min-height: 34px;
+    padding: 0 5px;
+    font-size: 11px;
+  }
+  .composer .composer-mode-menu { right: 0; bottom: 42px; }
+  .messages { padding-bottom: 206px; }
+}
+@media (max-width: 360px) {
+  .composer-mode { min-width: 58px; max-width: 72px; }
+  .composer-toolbar-left .composer-button {
+    width: 30px;
+    min-width: 30px;
+    flex-basis: 30px;
+  }
+}
