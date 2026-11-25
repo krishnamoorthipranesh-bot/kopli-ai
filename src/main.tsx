@@ -1697,7 +1697,7 @@ function App() {
                   setToolResult(null);
                 }} />
                 {toolEditPreview && <img className="generated-image-preview" src={toolEditPreview} alt="Selected image to edit" />}
-                <small>Cloudflare FLUX Kontext image editing is a paid model; Cloudflare may charge per successful edit.</small>
+                <small>Cloudflare FLUX Kontext Pro costs about $0.04 per image. Each successful edit may be billed to your Cloudflare account; check your usage limits before editing.</small>
               </div>}
               <label className="explore-field" htmlFor="tool-prompt"><span>{toolType === "image" ? "Describe the image" : toolType === "edit" ? "How should KOPLI AI edit it?" : "What should KOPLI AI create?"}</span>
                 <textarea id="tool-prompt" className="chat-search" value={toolPrompt} onChange={event => setToolPrompt(event.target.value)} maxLength={toolType === "edit" ? 1600 : 10000} placeholder={toolType === "image" ? "Describe the subject, composition, lighting, and mood…" : toolType === "edit" ? "Example: remove the background, change the sky to sunset, keep the person unchanged…" : "Describe the content, audience, key points, and any details to include…"} />
