@@ -132,6 +132,7 @@ async function request<T>(url: string, init: RequestInit = {}, timeoutMs = 30000
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   const abort = () => controller.abort();
   init.signal?.addEventListener("abort", abort, { once: true });
+  if (init.signal?.aborted) controller.abort();
   let response: Response;
   try { response = await fetch(url, { ...init, credentials: "include", headers, signal: controller.signal }); }
   catch (error) {
@@ -933,7 +934,7 @@ function App() {
           if (creationIntent.type === "image") {
             const result = await request<{ id: string; url: string; fileName: string; mimeType: string; imageData: string }>(
               "/api/images/generate",
-              jsonRequest("POST", { prompt: text, includePreview: true }),
+              { ...jsonRequest("POST", { prompt: text, includePreview: true }), signal: controller.signal },
               150000
             );
             const previewUrl = `data:${result.mimeType};base64,${result.imageData}`;
@@ -944,7 +945,7 @@ function App() {
             const endpoint = format === "pdf" ? "/api/pdf/generate" : format === "pptx" ? "/api/presentations/generate" : "/api/documents/generate";
             const result = await request<{ id: string; url: string; fileName: string; mimeType: string; format: string }>(
               endpoint,
-              jsonRequest("POST", { content: text, format, includeContent: false }),
+              { ...jsonRequest("POST", { content: text, format, includeContent: false }), signal: controller.signal },
               150000
             );
             assistantContent = `Your ${format.toUpperCase()} file is ready.\n\n[Download ${result.fileName}](${result.url})`;
@@ -970,7 +971,7 @@ function App() {
       if (imageLookupIntent) {
         const result = await request<{ query: string; images: Array<{ title: string; url: string; source: string }> }>(
           "/api/images/search",
-          jsonRequest("POST", { prompt: text }),
+          { ...jsonRequest("POST", { prompt: text }), signal: controller.signal },
           30000
         );
         const images = Array.isArray(result.images) ? result.images.slice(0, 4) : [];
@@ -990,13 +991,13 @@ function App() {
         if (file.mimeType.startsWith("image/")) continue;
         const analysis = await request<{ text: string; truncated: boolean }>(
           `/api/files/${encodeURIComponent(file.id)}/analyze`,
-          jsonRequest("POST", { mimeType: file.mimeType })
+          { ...jsonRequest("POST", { mimeType: file.mimeType }), signal: controller.signal }
         );
         submittedText += `\n\n[Text extracted from ${file.fileName}${analysis.truncated ? " (truncated)" : ""}]\n${analysis.text.slice(0, 30000)}`;
       }
       const hasImages = files.some(file => file.mimeType.startsWith("image/"));
       if (mode === "research" && !hasImages) {
-        const result = await request<{ answer: string; sources: Source[]; conversationId?: string }>("/api/chat/search", jsonRequest("POST", { message: submittedText, conversationId }));
+        const result = await request<{ answer: string; sources: Source[]; conversationId?: string }>("/api/chat/search", { ...jsonRequest("POST", { message: submittedText, conversationId }), signal: controller.signal }, 120000);
         setActiveId(result.conversationId || conversationId);
         setMessages(previous => previous.map(message => message.id === assistantId
           ? { ...message, content: result.answer, sources: result.sources, streaming: false }
@@ -1072,7 +1073,7 @@ function App() {
       if (files.length) setUploadedFiles(files);
       if (!aborted && text) setPrompt(text);
       setMessages(previous => previous.map(message => message.id === assistantId
-        ? { ...message, content: aborted ? (message.content || "Response stopped.") : `Unable to complete the request: ${errorText(error)}`, streaming: false }
+        ? { ...message, content: aborted ? (message.content ? `${message.content}\\n\\n(Response stopped.)` : "Response stopped.") : message.content ? `${message.content}\\n\\n(Response interrupted: ${errorText(error)})` : `Unable to complete the request: ${errorText(error)}`, streaming: false }
         : message));
     } finally {
       window.clearTimeout(requestTimeout);
