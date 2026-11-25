@@ -2023,9 +2023,9 @@ app.use((_req, res) => {
   res.type("html").send(fs.readFileSync(indexFile));
 });
 
-export { app };
+export { app, initializeDatabase };
 const port = Number(process.env.PORT || 8787);
-if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+if (process.env.NODE_ENV !== "test" && !process.env.VITEST && !process.env.VERCEL) {
   app.listen(port, () => {
     console.log(`KOPLI AI server listening on http://localhost:${port}`);
     void initializeDatabase();
