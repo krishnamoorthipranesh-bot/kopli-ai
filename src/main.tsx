@@ -403,8 +403,10 @@ function App() {
   const [searchBusy, setSearchBusy] = useState(false);
   const [libraryFiles, setLibraryFiles] = useState<LibraryFile[]>([]);
   const [libraryBusy, setLibraryBusy] = useState(false);
-  const [toolType, setToolType] = useState<"image" | "docx" | "pdf" | "pptx" | "xlsx">("image");
+  const [toolType, setToolType] = useState<"image" | "edit" | "docx" | "pdf" | "pptx" | "xlsx">("image");
   const [toolPrompt, setToolPrompt] = useState("");
+  const [toolEditFile, setToolEditFile] = useState<File | null>(null);
+  const [toolEditPreview, setToolEditPreview] = useState("");
   const [toolTitle, setToolTitle] = useState("");
   const [toolResult, setToolResult] = useState<ExploreResult | null>(null);
   const [toolPreview, setToolPreview] = useState(false);
@@ -1406,6 +1408,10 @@ function App() {
   async function generateContent(event: FormEvent) {
     event.preventDefault();
     if (!toolPrompt.trim() || toolBusy) return;
+    if (toolType === "edit" && !toolEditFile) {
+      setNotice("Choose an image before starting the edit.");
+      return;
+    }
     setToolBusy(true);
     setToolResult(null);
     try {
@@ -1414,6 +1420,14 @@ function App() {
         const previewUrl = `data:${result.mimeType};base64,${result.imageData}`;
         setToolResult({ fileName: result.fileName, mimeType: result.mimeType, previewUrl });
         setImageHistory(previous => [{ prompt: toolPrompt, previewUrl, fileName: result.fileName }, ...previous.filter(item => item.previewUrl !== previewUrl)].slice(0, 5));
+      } else if (toolType === "edit" && toolEditFile) {
+        const form = new FormData();
+        form.append("image", toolEditFile);
+        form.append("prompt", toolPrompt);
+        const response = await fetch("/api/images/edit", { method: "POST", credentials: "include", body: form });
+        const result = await response.json().catch(() => ({})) as { fileName?: string; mimeType?: string; imageData?: string; error?: string };
+        if (!response.ok || !result.imageData) throw new ApiError(result.error || `Image editing failed (${response.status}).`, response.status);
+        setToolResult({ fileName: result.fileName || "KOPLI_AI_Edited.png", mimeType: result.mimeType || "image/png", previewUrl: `data:${result.mimeType || "image/png"};base64,${result.imageData}` });
       } else if (toolType === "docx") {
         const result = await request<{ title: string; content: string }>("/api/documents/draft", jsonRequest("POST", { prompt: toolPrompt, title: toolTitle || undefined }));
         setToolResult({ title: result.title, content: result.content, fileName: `${result.title}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
@@ -1611,7 +1625,8 @@ function App() {
           <header className="page-heading"><h1>Explore</h1><p>Create useful content with KOPLI AI tools.</p></header>
           <div className="tool-grid explore-tool-grid">
             {([
-              ["image", ImageIcon, "Image generation", "Create an image from a text description.", "/tools/explore-image.svg"],
+              ["image", ImageIcon, "Image generation", "Create original images from detailed prompts.", "/tools/explore-image.svg"],
+              ["edit", Images, "AI image editor", "Upload a photo and edit it with natural language.", "/tools/explore-image.svg"],
               ["docx", FileText, "Documents", "Draft, edit, preview, and export your document.", "/tools/explore-documents.svg"],
               ["pdf", FileText, "PDF reports", "Generate a polished, printable report.", "/tools/explore-pdf.svg"],
               ["pptx", Library, "Presentations", "Generate a professional slide deck.", "/tools/explore-presentations.svg"],
@@ -1623,26 +1638,48 @@ function App() {
           </div>
           <div className="settings-card modern explore-workspace" aria-label={`${toolType} tool`}>
             {!user && <div className="explore-provider-note"><strong>Sign in to create and download files</strong><span>Generated files are private to your account.</span><button type="button" onClick={() => openAccountAuth()}>Sign in</button></div>}
-            {user && toolProviders && ((toolType === "image" && !toolProviders.cloudflareAi) || (toolType !== "image" && !toolProviders.groq)) && <div className="explore-provider-note" role="status">
-              <strong>{toolType === "image" ? "Image generation needs provider setup" : "AI file generation needs provider setup"}</strong>
-              <span>{toolType === "image" ? "Configure CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in Vercel to enable image generation." : "Configure GROQ_API_KEY in Vercel to enable document generation."}</span>
+            {user && toolProviders && (((toolType === "image" || toolType === "edit") && !toolProviders.cloudflareAi) || ((toolType !== "image" && toolType !== "edit") && !toolProviders.groq)) && <div className="explore-provider-note" role="status">
+              <strong>{toolType === "image" || toolType === "edit" ? "Cloudflare image tools need provider setup" : "AI file generation needs provider setup"}</strong>
+              <span>{toolType === "image" || toolType === "edit" ? "Configure CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in Vercel to enable image AI." : "Configure GROQ_API_KEY in Vercel to enable document generation."}</span>
             </div>}
-            <div className="explore-form-heading"><div><span className="eyebrow">KOPLI AI TOOL</span><h2>{({image:"Image generation",docx:"Documents",pdf:"PDF reports",pptx:"Presentations",xlsx:"Spreadsheets"})[toolType]}</h2></div>{toolResult && <button type="button" className="explore-text-action" onClick={() => { setToolResult(null); setToolPreview(false); }}>Clear result</button>}</div>
+            <div className="explore-form-heading"><div><span className="eyebrow">KOPLI AI TOOL</span><h2>{({image:"Image generation",edit:"AI image editor",docx:"Documents",pdf:"PDF reports",pptx:"Presentations",xlsx:"Spreadsheets"})[toolType]}</h2></div>{toolResult && <button type="button" className="explore-text-action" onClick={() => { setToolResult(null); setToolPreview(false); }}>Clear result</button>}</div>
             <form onSubmit={event => void generateContent(event)}>
-              {toolType !== "image" && <label className="explore-field"><span>Title <small>(optional)</small></span><input className="chat-search" value={toolTitle} onChange={event => setToolTitle(event.target.value)} maxLength={160} placeholder="Give your file a title" /></label>}
+              {toolType !== "image" && toolType !== "edit" && <label className="explore-field"><span>Title <small>(optional)</small></span><input className="chat-search" value={toolTitle} onChange={event => setToolTitle(event.target.value)} maxLength={160} placeholder="Give your file a title" /></label>}
               {toolType === "image" && <div className="explore-image-options">
                 <label className="explore-field"><span>Style</span><select className="chat-search" value={toolStyle} onChange={event => setToolStyle(event.target.value)}><option value="">Automatic</option><option value="photographic">Photographic</option><option value="digital-art">Digital art</option><option value="3d-model">3D</option><option value="cinematic">Cinematic</option><option value="anime">Anime</option><option value="isometric">Isometric</option><option value="line-art">Line art</option></select></label>
                 <label className="explore-field"><span>Aspect ratio</span><select className="chat-search" value={toolAspect} onChange={event => setToolAspect(event.target.value)}>{["1:1","16:9","3:2","4:5","2:3","9:16","21:9","5:4"].map(value => <option key={value}>{value}</option>)}</select></label>
                 <label className="explore-field"><span>File type</span><select className="chat-search" value={toolImageFormat} onChange={event => setToolImageFormat(event.target.value)}><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></label>
               </div>}
-              <label className="explore-field" htmlFor="tool-prompt"><span>{toolType === "image" ? "Describe the image" : "What should KOPLI AI create?"}</span>
-                <textarea id="tool-prompt" className="chat-search" value={toolPrompt} onChange={event => setToolPrompt(event.target.value)} maxLength={10000} placeholder={toolType === "image" ? "Describe the subject, composition, lighting, and mood…" : "Describe the content, audience, key points, and any details to include…"} />
+              {toolType === "edit" && <div className="explore-field">
+                <span>Upload image <small>(PNG, JPEG, or WebP · max 8 MB)</small></span>
+                <input className="chat-search" type="file" accept="image/png,image/jpeg,image/webp" onChange={event => {
+                  const file = event.currentTarget.files?.[0];
+                  if (!file) { setToolEditFile(null); setToolEditPreview(""); return; }
+                  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 8 * 1024 * 1024) {
+                    setNotice("Choose a PNG, JPEG, or WebP image smaller than 8 MB.");
+                    event.currentTarget.value = "";
+                    setToolEditFile(null);
+                    setToolEditPreview("");
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onload = () => setToolEditPreview(String(reader.result || ""));
+                  reader.onerror = () => setNotice("The selected image could not be previewed.");
+                  reader.readAsDataURL(file);
+                  setToolEditFile(file);
+                  setToolResult(null);
+                }} />
+                {toolEditPreview && <img className="generated-image-preview" src={toolEditPreview} alt="Selected image to edit" />}
+                <small>Cloudflare FLUX Kontext image editing is a paid model; Cloudflare may charge per successful edit.</small>
+              </div>}
+              <label className="explore-field" htmlFor="tool-prompt"><span>{toolType === "image" ? "Describe the image" : toolType === "edit" ? "How should KOPLI AI edit it?" : "What should KOPLI AI create?"}</span>
+                <textarea id="tool-prompt" className="chat-search" value={toolPrompt} onChange={event => setToolPrompt(event.target.value)} maxLength={toolType === "edit" ? 1600 : 10000} placeholder={toolType === "image" ? "Describe the subject, composition, lighting, and mood…" : toolType === "edit" ? "Example: remove the background, change the sky to sunset, keep the person unchanged…" : "Describe the content, audience, key points, and any details to include…"} />
               </label>
-              <div className="explore-form-footer"><span>{toolPrompt.length.toLocaleString()} / 10,000</span><button className="auth-submit" type="submit" disabled={!user || toolBusy || !toolPrompt.trim() || (toolProviders ? toolType === "image" ? !toolProviders.cloudflareAi : !toolProviders.groq : false)}>{toolBusy ? "Creating…" : toolType === "image" && toolResult ? "Regenerate image" : `Create ${toolType.toUpperCase()}`}</button></div>
+              <div className="explore-form-footer"><span>{toolPrompt.length.toLocaleString()} / {toolType === "edit" ? "1,600" : "10,000"}</span><button className="auth-submit" type="submit" disabled={!user || toolBusy || !toolPrompt.trim() || (toolType === "edit" && !toolEditFile) || (toolProviders ? (toolType === "image" || toolType === "edit") ? !toolProviders.cloudflareAi : !toolProviders.groq : false)}>{toolBusy ? (toolType === "edit" ? "Editing…" : "Creating…") : toolType === "edit" ? "Edit image" : toolType === "image" && toolResult ? "Regenerate image" : `Create ${toolType.toUpperCase()}`}</button></div>
             </form>
-            {toolBusy && <p className="explore-status" role="status">KOPLI AI is creating your {toolType === "image" ? "image" : toolType === "docx" ? "document draft" : toolType.toUpperCase()}…</p>}
+            {toolBusy && <p className="explore-status" role="status">KOPLI AI is {toolType === "edit" ? "editing your image" : `creating your ${toolType === "image" ? "image" : toolType === "docx" ? "document draft" : toolType.toUpperCase()}`}…</p>}
             {toolResult && <div className="generated-image-card explore-result">
-              {toolType === "image" && toolResult.previewUrl && <img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || "AI generated image"} />}
+              {(toolType === "image" || toolType === "edit") && toolResult.previewUrl && <img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || (toolType === "edit" ? "AI edited image" : "AI generated image")} />}
               {toolType === "pdf" && toolResult.previewUrl && <iframe className="explore-pdf-preview" src={toolResult.previewUrl} title={toolResult.fileName} />}
               {toolType === "docx" && toolResult.content !== undefined && <>
                 <div className="explore-result-tabs"><button type="button" className={!toolPreview ? "active" : ""} onClick={() => setToolPreview(false)}>Edit</button><button type="button" className={toolPreview ? "active" : ""} onClick={() => setToolPreview(true)}>Preview</button></div>
