@@ -95,7 +95,7 @@ for (const dir of [storage, generated, uploads]) fs.mkdirSync(dir, { recursive: 
 const storageBucket = process.env.SUPABASE_STORAGE_BUCKET?.trim() || "kopli-user-files";
 const persistentStorageConfigured = () => configured(process.env.SUPABASE_URL) && configured(process.env.SUPABASE_SERVICE_ROLE_KEY);
 function storageObjectUrl(objectPath: string) {
-  const base = process.env.SUPABASE_URL?.trim().replace(/\\/+$/, "");
+  const base = process.env.SUPABASE_URL?.trim().replace(/\/+$/, "");
   if (!base || !persistentStorageConfigured()) throw new Error("Persistent file storage is not configured.");
   const encodedPath = objectPath.split("/").map(segment => encodeURIComponent(segment)).join("/");
   return `${base}/storage/v1/object/${storageBucket}/${encodedPath}`;
@@ -129,7 +129,7 @@ async function downloadPersistentObject(objectPath: string): Promise<Buffer> {
 }
 async function deletePersistentObject(objectPath: string) {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  const base = process.env.SUPABASE_URL?.trim().replace(/\\/+$/, "");
+  const base = process.env.SUPABASE_URL?.trim().replace(/\/+$/, "");
   if (!base || !key) throw new Error("Persistent file storage is not configured.");
   const response = await fetch(`${base}/storage/v1/object/${storageBucket}`, {
     method: "DELETE",
