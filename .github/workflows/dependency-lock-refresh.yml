@@ -1,29 +1,31 @@
-name: Refresh audited dependency lockfile
+name: Verify audited dependency lockfile
 
 on:
   pull_request:
     branches: [master]
     paths:
       - "package.json"
+      - "package-lock.json"
       - ".github/workflows/dependency-lock-refresh.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  refresh-and-verify:
+  verify-and-audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          persist-credentials: true
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Regenerate lockfile
-        run: npm install --package-lock-only --include=dev
+          cache: npm
+      - name: Verify lockfile is in sync
+        run: |
+          npm install --package-lock-only --ignore-scripts --include=dev
+          git diff --exit-code -- package-lock.json
       - name: Install locked dependencies
         run: npm ci --include=dev
       - name: Fail on high or critical vulnerabilities
@@ -34,16 +36,3 @@ jobs:
         run: npm test
       - name: Production build
         run: npm run build
-      - name: Commit regenerated lockfile
-        env:
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: |
-          if git diff --quiet -- package-lock.json; then
-            echo "Lockfile already current."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          git commit -m "chore(deps): refresh audited npm lockfile"
-          git push origin "HEAD:${HEAD_REF}"
