@@ -20,7 +20,7 @@ The CI workflow runs:
 - production build (Prisma client generation, TypeScript build, server bundle, Vite build)
 
 ## Dependency audit details
-The successful CI run's npm audit inventory reported 7 high-severity vulnerabilities, 0 critical, 0 moderate, and 0 low. Affected packages include `@prisma/config`, `deepmerge-ts`, `effect`, `prisma`, `image-size`, `pptxgenjs`, and `xlsx`. The Prisma/PptxGenJS fixes cross major versions and `xlsx` has no npm fix. The audit step is explicitly non-blocking; do not interpret the green build as a clean security audit.
+The latest verified npm audit reports 0 vulnerabilities across the lockfile. The refreshed lockfile passed npm ci and npm audit --audit-level=high; high/critical findings now fail CI.
 
 
 ## Latest verified CI run
@@ -30,8 +30,10 @@ The successful CI run's npm audit inventory reported 7 high-severity vulnerabili
 - The dependency audit is still informational and reported 7 high-severity findings in the audit inventory.
 - A Vercel Preview for this exact head and real visual/mobile QA remain unverified.
 
-## Not yet verified for this branch
-No passing CI run or Vercel Preview deployment is claimed until GitHub Actions and Vercel report success for this exact branch commit.
+## Latest branch verification
+- GitHub CI run #119: PASS — dependency install, strict npm audit, lint, TypeScript, 23 tests, and production build.
+- Dependency lock refresh workflow run #8: PASS — npm ci, strict audit, TypeScript, 23 tests, and production build; regenerated package-lock.json committed.
+- Vercel exact-head Preview remains blocked by the account's daily deployment cap; no visual browser/Android device QA is claimed.
 
 ## Production baseline previously inspected
 - Vercel production deployment at commit `cb3b8d96fed86c6bb62fb70ba47e9488a989a045` was `READY`.
@@ -40,8 +42,8 @@ No passing CI run or Vercel Preview deployment is claimed until GitHub Actions a
 - `SUPABASE_SERVICE_ROLE_KEY` was missing from the inspected Vercel environment-variable names; durable file storage was not verified.
 - Full real-provider integration tests, durable file round-trips across serverless instances, browser E2E, and physical Android QA were not performed in that inspection.
 
-## Important dependency note
-`package.json` and `package-lock.json` currently disagree on package declarations (including `pdf-parse` and TypeScript). CI uses `npm install --include=dev` to reconcile the working install. Do not switch to `npm ci` until a network-enabled lockfile regeneration has been reviewed and committed.
+## Dependency lockfile
+`package.json` and `package-lock.json` are now aligned. CI uses `npm ci --include=dev` and the strict npm audit script.
 
 ## Reporting rule
 A deployment marked READY proves deployment status only. It does not prove successful authentication, AI streaming, research, file persistence, or email delivery.
