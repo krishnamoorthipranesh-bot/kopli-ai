@@ -6,7 +6,7 @@ import {
   ArrowLeft, Brain, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Code2,
   Copy, Download, Eye, EyeOff, FileText, Files, Globe2, Image as ImageIcon, Images, Library,
   LogIn, LogOut, Menu, Mic, CircleHelp, MoreHorizontal, Plus, Search, Share2, LockKeyhole, Folder,
-  Send, Settings, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
+  Send, Settings, ShieldCheck, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
   UserRound, Volume2, X, Zap
 } from "lucide-react";
 import "./styles.css";
@@ -14,7 +14,7 @@ import "./theme.css";
 import "./chat-theme.css";
 
 type Mode = "fast" | "smart" | "reasoning" | "coding" | "research" | "vision" | "study";
-type Section = "Chat" | "Search" | "Explore" | "Library" | "Settings";
+type Section = "Chat" | "Search" | "Explore" | "Library" | "Settings" | "Admin";
 type Rating = "helpful" | "not_helpful";
 type IconComponent = typeof Sparkles;
 
@@ -403,6 +403,9 @@ function App() {
   const [searchBusy, setSearchBusy] = useState(false);
   const [libraryFiles, setLibraryFiles] = useState<LibraryFile[]>([]);
   const [libraryBusy, setLibraryBusy] = useState(false);
+  const [adminOverview, setAdminOverview] = useState<{ users: number; conversations: number; files: number; storageBytes: number } | null>(null);
+  const [adminUsers, setAdminUsers] = useState<Array<{ id: string; email: string; name: string | null; role: "user" | "owner"; createdAt: string }>>([]);
+  const [adminBusy, setAdminBusy] = useState(false);
   const [toolType, setToolType] = useState<"image" | "edit" | "docx" | "pdf" | "pptx" | "xlsx">("image");
   const [toolPrompt, setToolPrompt] = useState("");
   const [toolEditFile, setToolEditFile] = useState<File | null>(null);
@@ -1398,6 +1401,19 @@ function App() {
     finally { setLibraryBusy(false); }
   }
 
+  async function loadAdminOverview() {
+    setAdminBusy(true);
+    try {
+      const [overview, accounts] = await Promise.all([
+        request<{ stats: { users: number; conversations: number; files: number; storageBytes: number } }>("/api/admin/overview"),
+        request<{ users: Array<{ id: string; email: string; name: string | null; role: "user" | "owner"; createdAt: string }> }>("/api/admin/users")
+      ]);
+      setAdminOverview(overview.stats);
+      setAdminUsers(accounts.users || []);
+    } catch (error) { setNotice(errorText(error)); }
+    finally { setAdminBusy(false); }
+  }
+
   async function removeLibraryFile(fileName: string) {
     if (!window.confirm(`Delete ${fileName}?`)) return;
     try {
@@ -1462,6 +1478,11 @@ function App() {
   }
 
   useEffect(() => {
+    if (section !== "Admin" || user?.role !== "owner") return;
+    void loadAdminOverview();
+  }, [section, user]);
+
+  useEffect(() => {
     if (section !== "Explore") return;
     let active = true;
     void request<{ groq?: boolean; cloudflareAi?: boolean }>("/api/status").then(status => { if (active) setToolProviders(status); }).catch(error => { if (active) setNotice(errorText(error)); });
@@ -1509,6 +1530,7 @@ function App() {
             const label = ({Chat:"AI Assistant",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[item.label];
             return <button key={item.label} className={section === item.label ? "active" : ""} aria-label={label} title={label} aria-current={section === item.label ? "page" : undefined} onClick={() => chooseSection(item.label)}><Icon size={18} aria-hidden="true" /><span>{label}</span></button>;
           })}
+          {user?.role === "owner" && <button className={section === "Admin" ? "active" : ""} aria-label="Admin dashboard" title="Admin dashboard" aria-current={section === "Admin" ? "page" : undefined} onClick={() => chooseSection("Admin")}><ShieldCheck size={18} aria-hidden="true" /><span>Admin dashboard</span></button>}
         </nav>
         <button className="sidebar-about" aria-label="About KOPLI AI" title="About KOPLI AI" onClick={() => { setSection("Settings"); setSettingsDetail("About KOPLI AI"); setSidebarOpen(false); }}><CircleHelp size={17} aria-hidden="true" /><span>About KOPLI AI</span></button>
         <div className="history">
@@ -1692,6 +1714,31 @@ function App() {
             </div>}
             {toolType === "image" && imageHistory.length > 0 && <div className="explore-history"><strong>Recent images</strong><div>{imageHistory.map(item => <button key={item.fileName} type="button" title={item.prompt} onClick={() => { setToolResult({ fileName: item.fileName, previewUrl: item.previewUrl }); setToolPrompt(item.prompt); }}><img src={item.previewUrl} alt="" /><span>{item.prompt}</span></button>)}</div></div>}
           </div>
+        </section>}
+
+        {section === "Admin" && <section className="page">
+          <header className="page-heading"><h1>Admin dashboard</h1><p>Monitor KOPLI AI accounts, activity, and private file storage.</p></header>
+          {adminBusy && <p className="explore-status" role="status">Loading admin overview…</p>}
+          {adminOverview && <div className="admin-stat-grid">
+            <div className="settings-card modern admin-stat"><span>Total users</span><strong>{adminOverview.users.toLocaleString()}</strong></div>
+            <div className="settings-card modern admin-stat"><span>Conversations</span><strong>{adminOverview.conversations.toLocaleString()}</strong></div>
+            <div className="settings-card modern admin-stat"><span>Stored files</span><strong>{adminOverview.files.toLocaleString()}</strong></div>
+            <div className="settings-card modern admin-stat"><span>Storage used</span><strong>{(adminOverview.storageBytes / (1024 * 1024)).toFixed(1)} MB</strong></div>
+          </div>}
+          <div className="settings-card modern admin-users-card">
+            <div className="explore-form-heading"><div><span className="eyebrow">ACCOUNT MANAGEMENT</span><h2>Recent accounts</h2></div><button type="button" className="explore-text-action" onClick={() => void loadAdminOverview()}>Refresh</button></div>
+            {adminUsers.length ? <div className="admin-user-list">{adminUsers.map(account => <div className="admin-user-row" key={account.id}>
+              <div><strong>{account.name || account.email}</strong><span>{account.email}</span></div>
+              <select aria-label={`Role for ${account.email}`} value={account.role} disabled={account.email === user?.email} onChange={async event => {
+                const role = event.target.value as "user" | "owner";
+                try {
+                  await request(`/api/admin/users/${encodeURIComponent(account.id)}`, jsonRequest("PATCH", { role }));
+                  setAdminUsers(previous => previous.map(item => item.id === account.id ? { ...item, role } : item));
+                } catch (error) { setNotice(errorText(error)); }
+              }}><option value="user">User</option><option value="owner">Owner</option></select>
+            </div>)}</div> : !adminBusy && <p className="empty-history">No accounts found.</p>}
+          </div>
+          <p className="explore-status">Billing, subscriptions, and paid usage controls are not connected yet; no charges or plans are changed from this dashboard.</p>
         </section>}
 
         {section === "Library" && <section className="page">
