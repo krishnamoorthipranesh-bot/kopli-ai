@@ -2144,7 +2144,7 @@ app.get("/api/files/:fileName/preview", async (req, res) => {
       text = extractTextFromZipArchive(bytes);
     } else if (extension === ".xlsx") {
       const workbook = XLSX.read(bytes, { type: "buffer" });
-      text = workbook.SheetNames.map(name => `## ${name}\\n${XLSX.utils.sheet_to_csv(workbook.Sheets[name])}`).join("\\n\\n");
+      text = workbook.SheetNames.map(name => `## ${name}\n${XLSX.utils.sheet_to_csv(workbook.Sheets[name])}`).join("\n\n");
     } else if ([".txt", ".md", ".csv", ".json", ".rtf"].includes(extension)) {
       text = decodeUploadedText(bytes);
     } else {
