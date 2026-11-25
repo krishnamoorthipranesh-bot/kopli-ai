@@ -1582,6 +1582,8 @@ app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
   const stylePreset = String(req.body?.stylePreset || "");
   const allowedStylePresets = new Set(["", "enhance", "anime", "photographic", "digital-art", "comic-book", "fantasy-art", "line-art", "analog-film", "neon-punk", "isometric", "low-poly", "origami", "modeling-compound", "cinematic", "3d-model", "pixel-art", "tile-texture"]);
   if (!allowedStylePresets.has(stylePreset)) return res.status(400).json({ error: "Choose a supported image style." });
+  const negativePrompt = String(req.body?.negativePrompt || "").trim();
+  if (negativePrompt.length > 500) return res.status(400).json({ error: "Negative prompts must be 500 characters or fewer." });
 
   const styleDescriptions: Record<string, string> = {
     anime: "anime illustration",
@@ -1628,7 +1630,7 @@ app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
       console.error("Image prompt enhancement failed; using the original prompt.", error);
     }
   }
-  const finalPrompt = [enhancedPrompt, styleDescriptions[stylePreset] || "", ratioDescription[aspectRatio] || ""].filter(Boolean).join(", ").slice(0, 2048);
+  const finalPrompt = [enhancedPrompt, styleDescriptions[stylePreset] || "", ratioDescription[aspectRatio] || "", negativePrompt ? `Avoid these elements: ${negativePrompt}` : ""].filter(Boolean).join(", ").slice(0, 2048);
   let response: Response;
   try {
     response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
