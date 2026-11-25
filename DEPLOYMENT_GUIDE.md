@@ -26,7 +26,7 @@ Set the variables in Vercel Project Settings → Environment Variables for **Pro
 4. Test chat, web search, image generation, and document generation.
 5. Upload a file, retrieve it, rename it, and delete it; verify private access.
 6. Inspect Vercel function logs for errors and verify mobile UI.
-7. Only after all checks pass, stop the old Render service manually in the Render dashboard. Removing repository config does not stop a running Render service.
+7. If an older hosting service is still running, shut it down separately after the Vercel production deployment has passed all checks.
 
 ## Rollback
 
