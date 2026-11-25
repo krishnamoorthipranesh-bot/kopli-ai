@@ -11,6 +11,7 @@ export default async function handler(req: any, res: any) {
     const query = requestUrl.searchParams.toString();
     req.url = originalPath + (query ? `?${query}` : "");
 
+    const { app, initializeDatabase } = await import("../server/server-bundle.mjs");
     databaseInitialization ??= initializeDatabase();
     await databaseInitialization;
     return app(req, res);
