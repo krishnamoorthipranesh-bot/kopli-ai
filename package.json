@@ -51,5 +51,15 @@
     "vite": "latest",
     "vitest": "latest",
     "esbuild": "0.28.2"
+  },
+  "overrides": {
+    "@prisma/config": {
+      "deepmerge-ts": "^8.0.2",
+      "effect": "^3.22.1"
+    },
+    "pptxgenjs": {
+      "image-size": "npm:image-size-next@1.2.2"
+    },
+    "xlsx": "npm:@keep-lts/xlsx@0.18.6"
   }
 }
