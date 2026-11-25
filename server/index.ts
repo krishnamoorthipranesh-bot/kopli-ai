@@ -475,7 +475,7 @@ const voiceUpload = multer({
 
 const imageEditUpload = multer({
   dest: uploads,
-  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+  limits: { fileSize: 3 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, callback) => {
     callback(null, ["image/png", "image/jpeg", "image/webp"].includes(file.mimetype));
   }
@@ -1786,13 +1786,14 @@ app.post("/api/images/edit", imageGenerationRateLimit, imageEditUpload.single("i
         return res.status(502).json({ error: "Cloudflare returned an unsupported image format." });
       }
       const contentLength = Number(imageResponse.headers.get("content-length") || 0);
-      if (contentLength > 16 * 1024 * 1024) return res.status(502).json({ error: "The edited image is larger than the supported 16 MB output limit." });
+      if (contentLength > 3 * 1024 * 1024) return res.status(502).json({ error: "The edited image is larger than the supported 3 MB output limit." });
       const outputBuffer = Buffer.from(await imageResponse.arrayBuffer());
-      if (outputBuffer.length > 16 * 1024 * 1024) return res.status(502).json({ error: "The edited image is larger than the supported 16 MB output limit." });
+      if (outputBuffer.length > 3 * 1024 * 1024) return res.status(502).json({ error: "The edited image is larger than the supported 16 MB output limit." });
       outputBytes = outputBuffer;
     } else if (typeof imageResult === "string") {
       outputBytes = Buffer.from(imageResult, "base64");
     }
+    if (outputBytes && outputBytes.length > 3 * 1024 * 1024) return res.status(502).json({ error: "The edited image is larger than the supported 3 MB output limit." });
     if (!outputBytes || !hasValidFileSignatureBytes(outputBytes, "image/png")) {
       return res.status(502).json({ error: "Cloudflare did not return a valid PNG image." });
     }
