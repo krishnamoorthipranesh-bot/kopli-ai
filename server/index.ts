@@ -1702,7 +1702,7 @@ app.post("/api/upload", uploadRateLimit, upload.array("files", 10), async (req, 
     if (!hasValidFileSignature(filePath, file.mimetype)) return [];
     return [{
       id: file.filename,
-      fileName: path.basename(file.originalname).replace(/[^\\w.\\- ()]/g, "_").slice(0, 180),
+      fileName: path.basename(file.originalname).replace(/[^\w. ()-]/g, "_").slice(0, 180),
       mimeType: file.mimetype,
       size: file.size,
       url: `/api/files/${file.filename}`
@@ -2140,7 +2140,7 @@ app.patch("/api/library/:fileName", async (req, res) => {
   if (!record) return res.status(404).json({ error: "File not found." });
   const requestedName = String(req.body?.name || "").trim().slice(0, 180);
   const extension = path.extname(fileName);
-  const baseName = path.basename(requestedName, path.extname(requestedName)).replace(/[^\\w.\\- ()]/g, "_").trim();
+  const baseName = path.basename(requestedName, path.extname(requestedName)).replace(/[^\w. ()-]/g, "_").trim();
   const nextName = baseName ? `${baseName}${extension}` : "";
   if (!nextName) return res.status(400).json({ error: "File name cannot be empty." });
   const duplicate = await prisma.storedFile.findFirst({ where: { userId: user.id, name: nextName, id: { not: record.id } } });
