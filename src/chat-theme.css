@@ -984,3 +984,49 @@
 
 /* Keep the three-dot workspace actions available on dashboard and tool pages too. */
 .main[data-section]:not([data-section="Chat"]) .chat-floating-actions { display: flex !important; }
+
+
+/* Mobile keyboard, safe-area and narrow-screen resilience. */
+@media (max-width: 900px) {
+  .app {
+    height: var(--kopli-viewport-height, 100dvh) !important;
+    min-height: 0 !important;
+  }
+  .main, .chat-shell, .chat-main, .messages {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .chat-shell { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .composer-wrap {
+    bottom: max(8px, env(safe-area-inset-bottom, 0px));
+    max-width: calc(100vw - 14px);
+  }
+  .composer-toolbar { min-width: 0; }
+  .composer-toolbar-left, .composer-toolbar-right { min-width: 0; }
+  .composer .composer-button { min-height: 40px; }
+  .message-content { overflow-wrap: anywhere; }
+  .message-content pre { max-width: 100%; overflow-x: auto; }
+  .message-content table { display: block; max-width: 100%; overflow-x: auto; }
+  .message-image-button, .message-image-button img { max-width: 100%; }
+  .image-lightbox { padding: max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)); }
+  .image-lightbox-image { max-height: calc(var(--kopli-viewport-height, 100dvh) - 112px); }
+}
+@media (max-width: 380px) {
+  .composer-wrap { width: calc(100% - 12px); }
+  .composer-toolbar-left, .composer-toolbar-right { gap: 2px !important; }
+  .composer .composer-mode { max-width: 88px !important; overflow: hidden; text-overflow: ellipsis; }
+}
+@media (max-height: 600px) and (max-width: 900px) {
+  .composer { min-height: 88px !important; gap: 3px !important; padding-top: 6px !important; padding-bottom: 5px !important; }
+  .composer .composer-input { min-height: 28px !important; max-height: 96px !important; }
+  .composer-toolbar { min-height: 34px !important; flex-basis: 34px !important; }
+  .chat-shell { padding-top: 48px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
