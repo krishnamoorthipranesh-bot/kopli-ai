@@ -991,6 +991,37 @@ app.post("/api/auth/reset-password", authRateLimit, async (req, res) => {
   res.json({ message: "Your password was updated. Sign in with your new password." });
 });
 
+app.get("/api/admin/overview", async (req, res) => {
+  const sessionUser = await currentUser(req);
+  if (!sessionUser || sessionUser.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: "The admin dashboard requires the database to be ready." });
+  try {
+    const [users, conversations, files, storage, recentUsers] = await Promise.all([
+      prisma.user.count(),
+      prisma.conversation.count(),
+      prisma.storedFile.count(),
+      prisma.storedFile.aggregate({ _sum: { size: true } }),
+      prisma.user.findMany({
+        take: 8,
+        orderBy: { createdAt: "desc" },
+        select: { id: true, email: true, name: true, role: true, createdAt: true }
+      })
+    ]);
+    return res.json({
+      stats: {
+        users,
+        conversations,
+        files,
+        storageBytes: storage._sum.size || 0
+      },
+      recentUsers
+    });
+  } catch (error) {
+    console.error("Admin overview query failed.", error);
+    return res.status(503).json({ error: "Admin statistics are temporarily unavailable." });
+  }
+});
+
 app.get("/api/admin/users", async (req, res) => {
   const sessionUser = await currentUser(req);
   if (!sessionUser || sessionUser.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
