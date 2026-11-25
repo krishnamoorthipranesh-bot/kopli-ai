@@ -1,32 +1,26 @@
-# KOPLI AI – Remaining Issues & Next Steps
+# KOPLI AI – Current Audit Findings and Remaining Work
 
-## 1. Project Status Summary
+Last reviewed against repository branch `master`, Vercel project configuration, and Supabase project state on 2026-11-25.
 
-The **KOPLI AI** application is fully tested, hardened, and ready for production deployment. All local issues (CORS restrictions on Render domains, Dockerfile missing dependencies, Prisma engine configuration on Debian slim, internal search loopback, and chat `/admin` command handling) have been completely resolved and verified through automated tests.
+## Verified baseline
+- Production Vercel deployment for commit `cb3b8d96fed86c6bb62fb70ba47e9488a989a045` was reported `READY`.
+- Production stack is Vercel + Supabase PostgreSQL + Prisma, with Groq, Cloudflare Workers AI, and Tavily integrations configured.
+- Supabase project is `ACTIVE_HEALTHY`.
+- Recent Vercel runtime error scan returned no matching error/fatal logs in the inspected 30-minute window.
+- Prior source changes added Supabase Storage support, route-specific rate limits, CORS tightening, and mobile layout fixes.
 
----
+## Critical blockers
+1. **Supabase Storage credential missing from Vercel.** `SUPABASE_SERVICE_ROLE_KEY` was not present in the inspected Production or Preview environment-variable names. Persistent storage code therefore cannot be considered operational. Add the service-role key directly in Vercel as an encrypted server-only variable; never share it in chat.
+2. **Legacy file records point to ephemeral paths.** Existing metadata includes records whose paths point to `/tmp` and other local filesystem locations. These records have not been migrated or deleted. Files that disappeared after a serverless restart cannot be reconstructed from metadata alone.
 
-## 2. Unresolved / Upstream Dependencies
+## Additional findings / verification gaps
+- `package.json` and `package-lock.json` are inconsistent (including `pdf-parse` and TypeScript declarations); CI currently uses `npm install` rather than deterministic `npm ci`. Regenerate and review the lockfile with a network-enabled build environment before switching to `npm ci`.
+- Several dependencies are declared as `latest`; pin reviewed versions to reduce supply-chain drift.
+- Resend sender verification and real password-recovery delivery have not been re-verified. Signup does not require email verification.
+- Android physical-device visual QA and a full desktop/mobile browser E2E suite have not been completed in this audit.
+- RLS is enabled on the existing public tables; no policies were present in the previous advisor review. The application uses server-side Prisma access. Do not add broad policies without reviewing the actual Data API exposure and access model.
+- No complete external penetration test or production load test has been performed.
 
-| Item | Severity | Context & Mitigation |
-|---|---|---|
-| **Transitive `npm audit` warnings** | Low / Info | Transitive dependencies in `pptxgenjs` (`image-size`), `prisma` CLI (`deepmerge-ts`), and `xlsx` report upstream vulnerabilities. Running `npm audit fix --force` would introduce breaking major-version changes. Defense-in-depth mitigations (file magic bytes validation, 25MB file limits, request rate-limiting, and server-side timeouts) mitigate exploit vectors. |
-| **Speech Recognition Network Dependency** | Info | In-browser speech-to-text relies on browser support (`webkitSpeechRecognition`). In browsers that lack native STT (e.g. Firefox desktop without speech extensions), voice input shows a graceful browser notification. |
-
----
-
-## 3. Post-Deployment User Action Items
-
-Once deployed to Render, the project owner should perform the following manual setup in the Render Dashboard:
-
-1. **Configure Environment Secrets**:
-   - Provide live `GROQ_API_KEY` to enable real-time streaming LLM intelligence.
-   - Provide live `DATABASE_URL` to enable multi-device user accounts, persistent chat history, and autonomous memory.
-   - Provide live `TAVILY_API_KEY` to enable live internet research.
-   - Provide live `STABILITY_API_KEY` to enable AI image generation.
-   - Set `KOPLI_OWNER_EMAIL` to your email address.
-2. **First-Time Owner Registration**:
-   - Visit the deployed web URL.
-   - Register a new account using the email configured in `KOPLI_OWNER_EMAIL`.
-   - Your account is automatically designated as `owner`.
-   - Type `/admin` in chat or navigate to the Settings/Admin tab to access the owner administration dashboard.
+## Work in progress
+- Branch `audit/production-cleanup-hardening` removes stale Render production references, removes the Render keep-awake workflow, removes unnecessary `GH_PAT` use from CI, and makes file-generation/upload endpoints fail closed when persistent storage is not configured.
+- These branch changes are not production-complete until CI, Preview, and Production verification pass.
