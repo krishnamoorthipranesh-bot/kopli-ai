@@ -445,6 +445,14 @@ function App() {
   const parallaxFrameRef = useRef<number | null>(null);
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
 
+  useEffect(() => () => {
+    if (voiceMeterFrameRef.current !== null) cancelAnimationFrame(voiceMeterFrameRef.current);
+    voiceStreamRef.current?.getTracks().forEach(track => track.stop());
+    if (voiceAudioContextRef.current && voiceAudioContextRef.current.state !== "closed") {
+      void voiceAudioContextRef.current.close().catch(() => undefined);
+    }
+  }, []);
+
   const currentMode = useMemo(() => modes.find(item => item.id === mode) || modes[1], [mode]);
   const ModeIcon = currentMode.icon;
   const assistantVisualState = voiceActive ? "listening"
@@ -1400,8 +1408,6 @@ function App() {
       recognitionRef.current = null;
       setVoiceActive(false);
       stopVoiceMeter();
-      voiceStreamRef.current?.getTracks().forEach(track => track.stop());
-      voiceStreamRef.current = null;
       return;
     }
     if (mediaRecorderRef.current?.state === "recording") {
