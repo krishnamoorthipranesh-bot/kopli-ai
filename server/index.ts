@@ -1793,7 +1793,9 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
       method = "DOCX text extraction";
     } else if (mimeType === "text/csv" || /\.csv$/i.test(fileId)) {
       const workbook = new ExcelJS.Workbook();
-      const worksheet = await workbook.csv.read(Readable.from(fileBytes));
+      const csvBuffer = Buffer.alloc(fileBytes.length);
+      fileBytes.copy(csvBuffer);
+      const worksheet = await workbook.csv.read(Readable.from([csvBuffer]));
       const rows: string[] = [];
       worksheet.eachRow({ includeEmpty: false }, row => {
         const values: string[] = [];
