@@ -31,6 +31,9 @@ import bcrypt from "bcryptjs";
 import { containsSensitiveSecret, isPastContextQuery, memoryKeywords } from "./memory-utils.js";
 import { aiConfig, securityConfig } from "./config.js";
 
+function safeErrorCategory(error: unknown) {
+  return error instanceof Error ? error.name : "UnknownError";
+}
 const app = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
@@ -43,7 +46,7 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
       connectSrc: ["'self'", "https://api.groq.com", "https://api.tavily.com", "https://api.stability.ai"],
-      frameSrc: ["'none'"],
+      frameSrc: ["'self'"],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
       formAction: ["'self'"]
@@ -53,7 +56,6 @@ app.use(helmet({
 export function isAllowedOrigin(origin?: string, hostHeader?: string): boolean {
   if (!origin) return true;
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
-  if (process.env.RENDER_EXTERNAL_URL && origin.toLowerCase() === process.env.RENDER_EXTERNAL_URL.toLowerCase()) return true;
   for (const vercelHost of [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]) {
     if (vercelHost && origin.toLowerCase() === `https://${vercelHost.toLowerCase()}`) return true;
   }
@@ -139,12 +141,23 @@ async function deletePersistentObject(objectPath: string) {
   });
   if (!response.ok && response.status !== 404) throw new Error("The stored file could not be deleted.");
 }
+export function shouldRejectEphemeralFileStorage(isVercel: boolean, persistentStorageIsConfigured: boolean) {
+  return isVercel && !persistentStorageIsConfigured;
+}
+
+export function decodeUploadedText(bytes: Buffer) {
+  return bytes.toString("utf8");
+}
+
 function persistentObjectPath(userId: string, kind: string, id: string, name: string) {
   const extension = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 12);
   return `${userId}/${kind}/${id}${extension}`;
 }
 async function saveUserFile(args: { id: string; userId: string; name: string; mimeType: string; bytes: Buffer; kind: string; localPath: string }) {
   if (!prisma) throw new Error("File metadata database is unavailable.");
+  if (shouldRejectEphemeralFileStorage(Boolean(process.env.VERCEL), persistentStorageConfigured())) {
+    throw new Error("Persistent file storage is not configured. Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel before saving files.");
+  }
   let storedPath = args.localPath;
   if (process.env.VERCEL && persistentStorageConfigured()) {
     const objectPath = persistentObjectPath(args.userId, args.kind, args.id, args.name);
@@ -219,12 +232,12 @@ function databaseUnavailableMessage(feature: string) {
   try {
     const host = new URL(process.env.DATABASE_URL || "").hostname.toLowerCase().replace(/^\[|\]$/g, "");
     if (["localhost", "127.0.0.1", "::1"].includes(host)) {
-      return `${feature} is unavailable because DATABASE_URL points to a local loopback host. Configure a reachable PostgreSQL server in Render.`;
+      return `${feature} is unavailable because DATABASE_URL points to a local loopback host. Configure a reachable PostgreSQL server through Supabase and Vercel.`;
     }
   } catch {
-    return `${feature} is unavailable because DATABASE_URL is invalid. Configure a valid PostgreSQL connection string in Render.`;
+    return `${feature} is unavailable because DATABASE_URL is invalid. Configure a valid Supabase PostgreSQL connection string in Vercel.`;
   }
-  return `${feature} is unavailable because the database connection failed. Check the PostgreSQL service and DATABASE_URL in Render.`;
+  return `${feature} is unavailable because the database connection failed. Check the Supabase PostgreSQL project and DATABASE_URL in Vercel.`;
 }
 
 async function createSession(userId: string, req: express.Request, res: express.Response) {
@@ -285,7 +298,7 @@ async function initializeDatabase() {
     } catch (error) {
       databaseReady = false;
       databaseStatus = attempt === 3 ? "unavailable" : "starting";
-      console.error(`Database connection attempt ${attempt + 1} of 4 failed.`, error);
+      console.error(`Database connection attempt ${attempt + 1} of 4 failed.`, safeErrorCategory(error));
       if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
     }
   }
@@ -499,7 +512,7 @@ app.post("/api/voice/transcribe", rateLimit({
     });
     res.json({ text: transcription.text || "" });
   } catch (error) {
-    console.error("Voice transcription failed:", error);
+    console.error("Voice transcription failed:", safeErrorCategory(error));
     res.status(502).json({ error: "Voice transcription failed. Please try recording again." });
   } finally {
     await fs.promises.unlink(audioPath).catch(() => undefined);
@@ -824,6 +837,14 @@ const researchRateLimit = createCostLimiter(60 * 1000, 10, "Research request lim
 const imageSearchRateLimit = createCostLimiter(60 * 1000, 20, "Image search limit reached. Please wait a minute and try again.");
 const imageGenerationRateLimit = createCostLimiter(15 * 60 * 1000, 5, "Image generation limit reached. Please wait 15 minutes before generating more images.");
 const uploadRateLimit = createCostLimiter(15 * 60 * 1000, 20, "Upload limit reached. Please wait before uploading more files.");
+const fileAnalysisRateLimit = createCostLimiter(15 * 60 * 1000, 12, "File analysis limit reached. Please wait before analyzing more documents.");
+const filePreviewRateLimit = createCostLimiter(15 * 60 * 1000, 12, "Document preview limit reached. Please wait before opening more previews.");
+const requirePersistentFileStorage: express.RequestHandler = (_req, res, next) => {
+  if (process.env.VERCEL && !persistentStorageConfigured()) {
+    return res.status(503).json({ error: "Persistent file storage is not configured. Configure Supabase Storage in Vercel before generating or saving files." });
+  }
+  return next();
+};
 const documentRateLimit = createCostLimiter(15 * 60 * 1000, 8, "Document generation limit reached. Please wait 15 minutes before creating more files.");
 
 const authRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-7", legacyHeaders: false });
@@ -845,7 +866,7 @@ app.post("/api/auth/register", authRateLimit, async (req, res) => {
     await createSession(user.id, req, res);
     res.status(201).json({ user: { email: user.email, name: user.name, role } });
   } catch (error) {
-    console.error("Account registration failed:", error);
+    console.error("Account registration failed:", safeErrorCategory(error));
     if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
       return res.status(409).json({ error: "An account with this email already exists." });
     }
@@ -868,7 +889,7 @@ app.post("/api/auth/login", authRateLimit, async (req, res) => {
     await createSession(user.id, req, res);
     res.json({ user: { email: user.email, name: user.name, role } });
   } catch (error) {
-    console.error("Account login failed:", error);
+    console.error("Account login failed:", safeErrorCategory(error));
     res.status(500).json({ error: "Login failed." });
   }
 });
@@ -885,7 +906,7 @@ app.post("/api/auth/resend-verification", authRateLimit, async (req, res) => {
   const tokenHash = hashToken(token);
   await prisma.emailVerificationToken.deleteMany({ where: { userId: user.id } });
   await prisma.emailVerificationToken.create({ data: { userId: user.id, tokenHash, expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) } });
-  const verificationUrl = new URL("/", process.env.APP_URL || "https://kopli-ai-1.onrender.com");
+  const verificationUrl = new URL("/", process.env.APP_URL || "https://kopli-ai.vercel.app");
   verificationUrl.searchParams.set("verifyToken", token);
   const sent = await sendAccountEmail(
     user.email,
@@ -942,7 +963,7 @@ app.post("/api/auth/forgot-password", authRateLimit, async (req, res) => {
   const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
   await prisma.passwordResetToken.deleteMany({ where: { userId: user.id, expiresAt: { lte: new Date() } } });
   await prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash: hashToken(token), expiresAt } });
-  const appUrl = process.env.APP_URL || "https://kopli-ai-1.onrender.com";
+  const appUrl = process.env.APP_URL || "https://kopli-ai.vercel.app";
   const resetUrl = new URL("/", appUrl);
   resetUrl.searchParams.set("resetToken", token);
   try {
@@ -959,7 +980,7 @@ app.post("/api/auth/forgot-password", authRateLimit, async (req, res) => {
     res.json({ message: "If an account exists for that email, a password reset link has been sent." });
   } catch (error) {
     await prisma.passwordResetToken.deleteMany({ where: { tokenHash: hashToken(token) } });
-    console.error("Password recovery email request failed:", error);
+    console.error("Password recovery email request failed:", safeErrorCategory(error));
     res.status(502).json({ error: "The recovery email could not be sent. Please try again." });
   }
 });
@@ -1013,7 +1034,7 @@ app.post("/api/auth/logout", async (req, res) => {
     try {
       await prisma.authSession.deleteMany({ where: { tokenHash: hashToken(token) } });
     } catch (error) {
-      console.error("Could not invalidate account session:", error);
+      console.error("Could not invalidate account session:", safeErrorCategory(error));
       res.clearCookie("kopli_session", { path: "/", secure: securityConfig.isProduction || req.secure, sameSite: "lax" });
       return res.status(503).json({ error: "The session cookie was cleared, but the server could not confirm session invalidation." });
     }
@@ -1136,7 +1157,7 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
         }
       }
     } catch (error) {
-      console.error("Could not persist authenticated chat message:", error);
+      console.error("Could not persist authenticated chat message:", safeErrorCategory(error));
       return res.status(503).json({ error: "Your conversation could not be saved. Please retry." });
     }
   }
@@ -1174,7 +1195,7 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
         : mode === "study"
           ? "You are KOPLI AI. Act as a patient study tutor. Explain ideas step by step at the learner's level, use clear examples, and check understanding. When asked, create practice questions, quizzes, flashcards, revision notes, or exam preparation material. Explain answers and be honest about uncertainty."
         : mode === "reasoning"
-          ? "You are KOPLI AI. Reason carefully and explain complex topics step by step."
+          ? "You are KOPLI AI. Analyze complex questions carefully, then present a concise explanation of the key factors, assumptions, and conclusion. Do not reveal private internal reasoning or hidden chain-of-thought."
           : mode === "vision"
             ? "You are KOPLI AI. If no image is attached, ask the user to attach a JPEG, PNG, or WEBP image before requesting visual analysis."
             : mode === "research"
@@ -1259,9 +1280,9 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
           model: imageInputs.length ? aiConfig.groqVisionModel : aiConfig.groqModel,
           messages,
           temperature: mode === "coding" ? 0.2 : mode === "reasoning" ? 0.4 : 0.7,
-          max_tokens: 8192,
+          max_tokens: mode === "fast" ? 2048 : 8192,
           stream: true
-        });
+        }, { signal: providerAbort.signal });
         let streamed = "";
         for await (const chunk of stream) {
           if (clientDisconnected || res.destroyed) break;
@@ -1276,7 +1297,7 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
       await runGroq();
     } catch (error: any) {
       if (!res.destroyed && !clientDisconnected) {
-        console.error("Chat provider request failed.", error);
+        console.error("Chat provider request failed.", safeErrorCategory(error));
         res.write(`data: ${JSON.stringify({ error: "The AI service could not complete this response. Please retry." })}\n\n`);
       }
     }
@@ -1288,7 +1309,7 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
       });
       await prisma.conversation.update({ where: { id }, data: { updatedAt: new Date() } });
     } catch (error) {
-      console.error("Could not persist assistant response:", error);
+      console.error("Could not persist assistant response:", safeErrorCategory(error));
       res.write(`data: ${JSON.stringify({ error: "The response was generated but could not be saved." })}\n\n`);
     }
   }
@@ -1298,7 +1319,7 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
   }
   if (authenticatedUser && prisma && preference?.learning && !containsSensitiveSecret(`${message}\n${assistantFull}`)) {
     void updateConversationSummary(authenticatedUser.id, id).catch(error => {
-      console.error("Could not update conversation memory summary:", error);
+      console.error("Could not update conversation memory summary:", safeErrorCategory(error));
     });
   }
 });
@@ -1473,18 +1494,18 @@ app.post("/api/chat/search", researchRateLimit, async (req, res) => {
         });
       }
     } catch (error) {
-      console.error("Could not save researched conversation:", error);
+      console.error("Could not save researched conversation:", safeErrorCategory(error));
       return res.status(503).json({ error: "The researched response could not be saved." });
     }
     try {
       const preference = await prisma.userPreference.findUnique({ where: { userId: user.id }, select: { learning: true } });
       if (preference?.learning) {
         void updateConversationSummary(user.id, conversationId).catch(error => {
-          console.error("Could not update researched conversation summary:", error);
+          console.error("Could not update researched conversation summary:", safeErrorCategory(error));
         });
       }
     } catch (error) {
-      console.error("Could not check researched conversation memory preference:", error);
+      console.error("Could not check researched conversation memory preference:", safeErrorCategory(error));
     }
   }
   res.json({ answer, sources, conversationId });
@@ -1510,7 +1531,7 @@ app.post("/api/images/search", imageSearchRateLimit, async (req, res) => {
       });
       query = (completion.choices[0]?.message?.content || query).trim().replace(/^["']|["']$/g, "").slice(0, 180) || query;
     } catch (error) {
-      console.error("Image search query normalization failed; using the original subject.", error);
+      console.error("Image search query normalization failed; using the original subject.", safeErrorCategory(error));
     }
   }
   try {
@@ -1551,12 +1572,12 @@ app.post("/api/images/search", imageSearchRateLimit, async (req, res) => {
     }).sort((a, b) => b.relevance - a.relevance).slice(0, 4).map(({ relevance: _relevance, ...image }) => image);
     return res.json({ query, images });
   } catch (error: any) {
-    console.error("Relevant image search failed.", error);
+    console.error("Relevant image search failed.", safeErrorCategory(error));
     return res.status(502).json({ error: "Relevant image search is temporarily unavailable. Please try again." });
   }
 });
 
-app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
+app.post("/api/images/generate", imageGenerationRateLimit, requirePersistentFileStorage, async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to generate images." });
   const prompt = String(req.body?.prompt || "").trim();
@@ -1566,7 +1587,7 @@ app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || "";
   const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim() || "";
   if (!configured(accountId) || !configured(apiToken)) {
-    return res.status(503).json({ error: "Cloudflare image generation is not configured on the server. The Cloudflare Account ID and Workers AI API token must be set in Render." });
+    return res.status(503).json({ error: "Cloudflare image generation is not configured on the server. Configure CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN as server-side Vercel environment variables." });
   }
 
   const aspectRatio = String(req.body?.aspectRatio || "1:1");
@@ -1618,7 +1639,7 @@ app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
       });
       enhancedPrompt = completion.choices[0]?.message?.content?.trim() || prompt;
     } catch (error) {
-      console.error("Image prompt enhancement failed; using the original prompt.", error);
+      console.error("Image prompt enhancement failed; using the original prompt.", safeErrorCategory(error));
     }
   }
   const finalPrompt = [enhancedPrompt, styleDescriptions[stylePreset] || "", ratioDescription[aspectRatio] || ""].filter(Boolean).join(", ").slice(0, 2048);
@@ -1631,12 +1652,12 @@ app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
       signal: AbortSignal.timeout(120000)
     });
   } catch (error) {
-    console.error("Cloudflare Workers AI image request failed.", error);
+    console.error("Cloudflare Workers AI image request failed.", safeErrorCategory(error));
     return res.status(502).json({ error: "Image generation could not reach Cloudflare. Please try again." });
   }
   if (!response.ok) {
     const detail = (await response.text().catch(() => "")).slice(0, 400);
-    console.error("Cloudflare Workers AI returned HTTP", response.status, detail);
+    console.error("Cloudflare Workers AI returned HTTP", response.status);
     return res.status(response.status >= 500 ? 502 : response.status).json({
       error: response.status === 401 || response.status === 403
         ? "Cloudflare rejected the Workers AI token. Check that the token has Workers AI Read permission and the Account ID is correct."
@@ -1703,6 +1724,10 @@ app.get("/api/images/:imageId", async (req, res) => {
 app.post("/api/upload", uploadRateLimit, upload.array("files", 10), async (req, res) => {
   const user = await currentUser(req);
   const rawFiles = req.files as Express.Multer.File[] || [];
+  if (process.env.VERCEL && !persistentStorageConfigured()) {
+    for (const file of rawFiles) await fs.promises.unlink(path.join(uploads, file.filename)).catch(() => undefined);
+    return res.status(503).json({ error: "Persistent file storage is not configured. Uploads are temporarily unavailable until Supabase Storage is connected." });
+  }
   const files = rawFiles.flatMap(file => {
     const filePath = path.join(uploads, file.filename);
     if (!hasValidFileSignature(filePath, file.mimetype)) return [];
@@ -1750,7 +1775,7 @@ app.post("/api/upload", uploadRateLimit, upload.array("files", 10), async (req, 
         await prisma.storedFile.deleteMany({ where: { id } }).catch(() => undefined);
       }
       for (const file of rawFiles) await fs.promises.unlink(path.join(uploads, file.filename)).catch(() => undefined);
-      console.error("Could not persist uploaded files.", error);
+      console.error("Could not persist uploaded files.", safeErrorCategory(error));
       return res.status(503).json({ error: "The files could not be safely saved. Please try again." });
     }
   } else if (user && prisma && databaseReady) {
@@ -1765,22 +1790,20 @@ app.post("/api/upload", uploadRateLimit, upload.array("files", 10), async (req, 
     } catch (error) {
       for (const id of savedIds) await prisma.storedFile.deleteMany({ where: { id, userId: user.id } }).catch(() => undefined);
       for (const file of rawFiles) await fs.promises.unlink(path.join(uploads, file.filename)).catch(() => undefined);
-      console.error("Could not persist uploaded files.", error);
+      console.error("Could not persist uploaded files.", safeErrorCategory(error));
       return res.status(503).json({ error: "The files could not be safely saved. Please try again." });
     }
   }
   res.json({ files });
 });
 
-app.post("/api/files/:fileId/analyze", async (req, res) => {
+app.post("/api/files/:fileId/analyze", fileAnalysisRateLimit, async (req, res) => {
   const user = await currentUser(req);
-  const fileId = path.basename(req.params.fileId);
+  const fileId = path.basename(String(req.params.fileId || ""));
   const storedFile = prisma && databaseReady ? await prisma.storedFile.findUnique({ where: { id: fileId } }) : null;
   if (user && (!storedFile || storedFile.userId !== user.id)) return res.status(404).json({ error: "Uploaded file not found." });
   if (!user && storedFile?.userId) return res.status(404).json({ error: "Uploaded file not found." });
   const file = path.join(uploads, fileId);
-  if (user && (!storedFile || storedFile.userId !== user.id)) return res.status(404).json({ error: "Uploaded file not found." });
-  if (!user && storedFile?.userId) return res.status(404).json({ error: "Uploaded file not found." });
   const fileBytes = await readUserFile(storedFile, file);
   if (!fileBytes) return res.status(404).json({ error: "Uploaded file not found." });
   const mimeType = storedFile?.mimeType || String(req.body?.mimeType || "");
@@ -1804,7 +1827,7 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
       }).join("\n\n");
       method = "Spreadsheet text extraction";
     } else if (/\.txt|\.md|\.rtf|\.json|\.csv$/i.test(fileId) || ["text/plain","text/markdown","text/rtf","application/rtf","application/json","text/csv"].includes(mimeType)) {
-      text = fs.readFileSync(file, "utf8");
+      text = decodeUploadedText(fileBytes);
       method = "Text extraction";
     } else if (mimeType.includes("presentationml") || /\.pptx$/i.test(fileId)) {
       text = extractTextFromZipArchive(fileBytes);
@@ -1817,8 +1840,9 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
     }
     if (!text.trim()) return res.status(422).json({ error: "No readable text was extracted. The document may be scanned or image-based.", method });
     res.json({ text: text.slice(0, 100000), method, truncated: text.length > 100000 });
-  } catch (error: any) {
-    res.status(422).json({ error: error?.message || "File extraction failed.", method: "Extraction" });
+  } catch (error) {
+    console.error("File text extraction failed.", safeErrorCategory(error));
+    res.status(422).json({ error: "The file could not be analyzed. Check that it is a supported, uncorrupted document and try again.", method: "Extraction" });
   }
 });
 
@@ -1864,7 +1888,7 @@ async function generateStructuredContent(prompt: string, topic: string, format: 
     });
     raw = response.choices[0]?.message?.content || "";
   } catch (error) {
-    console.error("AI file generation request failed.", error);
+    console.error("AI file generation request failed.", safeErrorCategory(error));
     throw generationError(502, "The AI provider could not generate this file. Check the provider configuration and try again.");
   }
   try {
@@ -1884,7 +1908,7 @@ async function generateStructuredContent(prompt: string, topic: string, format: 
     }
     return json;
   } catch (error) {
-    console.error("AI provider returned invalid structured file content.", error);
+    console.error("AI provider returned invalid structured file content.", safeErrorCategory(error));
     throw generationError(502, "The AI provider returned an invalid file draft. Please try again.");
   }
 }
@@ -2092,14 +2116,48 @@ app.post("/api/documents/export", documentRateLimit, async (req, res) => {
     res.setHeader("Content-Length", bytes.length);
     return res.send(bytes);
   } catch (error) {
-    console.error("Document export failed.", error);
+    console.error("Document export failed.", safeErrorCategory(error));
     return res.status(500).json({ error: "The document could not be exported. Please try again." });
   }
 });
 
-app.post("/api/documents/generate", documentRateLimit, generateFile);
-app.post("/api/presentations/generate", documentRateLimit, generateFile);
-app.post("/api/pdf/generate", documentRateLimit, generateFile);
+app.post("/api/documents/generate", documentRateLimit, requirePersistentFileStorage, generateFile);
+app.post("/api/presentations/generate", documentRateLimit, requirePersistentFileStorage, generateFile);
+app.post("/api/pdf/generate", documentRateLimit, requirePersistentFileStorage, generateFile);
+
+app.get("/api/files/:fileName/preview", filePreviewRateLimit, async (req, res) => {
+  const user = await currentUser(req);
+  if (!user) return res.status(401).json({ error: "Sign in to preview files." });
+  if (!prisma) return res.status(503).json({ error: "File metadata database is unavailable." });
+  const fileName = path.basename(String(req.params.fileName || ""));
+  const record = await prisma.storedFile.findFirst({ where: { name: fileName, userId: user.id } });
+  if (!record) return res.status(404).json({ error: "File not found." });
+  const localPath = [generated, uploads].map(dir => path.join(dir, fileName)).find(candidate => fs.existsSync(candidate));
+  const bytes = await readUserFile(record, localPath);
+  if (!bytes) return res.status(404).json({ error: "File not found." });
+  const extension = path.extname(fileName).toLowerCase();
+  let text = "";
+  try {
+    if (extension === ".docx") {
+      const extracted = await mammoth.extractRawText({ buffer: bytes });
+      text = extracted.value;
+    } else if (extension === ".pptx") {
+      text = extractTextFromZipArchive(bytes);
+    } else if (extension === ".xlsx") {
+      const workbook = XLSX.read(bytes, { type: "buffer" });
+      text = workbook.SheetNames.map(name => `## ${name}\n${XLSX.utils.sheet_to_csv(workbook.Sheets[name])}`).join("\n\n");
+    } else if ([".txt", ".md", ".csv", ".json", ".rtf"].includes(extension)) {
+      text = decodeUploadedText(bytes);
+    } else {
+      return res.status(415).json({ error: "In-app preview is not available for this file type. Download the file to open it." });
+    }
+    if (!text.trim()) return res.status(422).json({ error: "No readable text was found in this document." });
+    return res.json({ fileName, text: text.slice(0, 100000), truncated: text.length > 100000 });
+  } catch (error) {
+    console.error("Document preview extraction failed.", safeErrorCategory(error));
+    return res.status(422).json({ error: "This document could not be previewed. Download it to open the original file." });
+  }
+});
 
 app.get("/api/files/:fileName", async (req, res) => {
   const user = await currentUser(req);
@@ -2184,16 +2242,21 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
     return res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? "Each file must be 25 MB or smaller." : "The upload could not be accepted. Attach up to 10 files at a time." });
   }
   const status = error && typeof error === "object" && "status" in error ? Number(error.status) : 500;
-  console.error("Unhandled request error:", error);
+  console.error("Unhandled request error:", safeErrorCategory(error));
   res.status(status >= 400 && status < 600 ? status : 500).json({ error: status === 413 ? "The request is too large." : "The request could not be completed." });
 });
 
-app.get(["/health", "/api/health"], (_req, res) => {
-  const ready = databaseStatus === "ready";
-  const fileStorageReady = !process.env.VERCEL || persistentStorageConfigured();
-  const status = ready && fileStorageReady ? "ok" : "degraded";
+// Liveness endpoint: keep the SPA's lightweight connectivity check independent
+// from optional/degraded persistence features.
+app.get("/health", (_req, res) => res.status(200).json({ status: "ok", live: true }));
+
+// Readiness endpoint: database and durable file storage must both be available.
+app.get("/api/health", (_req, res) => {
+  const databaseReadyNow = databaseStatus === "ready";
+  const fileStorageReady = !shouldRejectEphemeralFileStorage(Boolean(process.env.VERCEL), persistentStorageConfigured());
+  const ready = databaseReadyNow && fileStorageReady;
   return res.status(ready ? 200 : 503).json({
-    status,
+    status: ready ? "ok" : "degraded",
     ready,
     persistence: databaseStatus,
     fileStorage: fileStorageReady ? "persistent" : "temporary",

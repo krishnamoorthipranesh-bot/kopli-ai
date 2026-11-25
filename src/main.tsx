@@ -36,7 +36,7 @@ interface ChatMessage {
   content: string;
   createdAt?: string;
   sources?: Source[];
-  attachments?: Array<{ fileName: string; mimeType: string; previewUrl?: string }>;
+  attachments?: Array<{ fileName: string; mimeType: string; previewUrl?: string; url?: string }>;
   streaming?: boolean;
   generationType?: "image" | "document";
   progress?: number;
@@ -132,6 +132,7 @@ async function request<T>(url: string, init: RequestInit = {}, timeoutMs = 30000
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   const abort = () => controller.abort();
   init.signal?.addEventListener("abort", abort, { once: true });
+  if (init.signal?.aborted) controller.abort();
   let response: Response;
   try { response = await fetch(url, { ...init, credentials: "include", headers, signal: controller.signal }); }
   catch (error) {
@@ -270,12 +271,42 @@ function MessageView({
 }) {
   const isUser = message.role === "user";
   const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null);
+  const [expandedDocument, setExpandedDocument] = useState<{ src: string; title: string } | null>(null);
+  const [documentPreviewText, setDocumentPreviewText] = useState("");
+  const [documentPreviewLoading, setDocumentPreviewLoading] = useState(false);
+  const [documentPreviewError, setDocumentPreviewError] = useState("");
   useEffect(() => {
-    if (!expandedImage) return;
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setExpandedImage(null); };
+    if (!expandedImage && !expandedDocument) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") { setExpandedImage(null); setExpandedDocument(null); }
+    };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [expandedImage]);
+  }, [expandedImage, expandedDocument]);
+  useEffect(() => {
+    if (!expandedDocument || /\.pdf(?:$|\?)/i.test(expandedDocument.src)) {
+      setDocumentPreviewText("");
+      setDocumentPreviewError("");
+      setDocumentPreviewLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    const filePath = expandedDocument.src.replace(/[?#].*$/, "").replace(/\/+$/, "");
+    setDocumentPreviewText("");
+    setDocumentPreviewError("");
+    setDocumentPreviewLoading(true);
+    void fetch(`${filePath}/preview`, { credentials: "include", signal: controller.signal })
+      .then(async response => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `Preview failed (${response.status}).`);
+        setDocumentPreviewText(String(body.text || ""));
+      })
+      .catch(error => {
+        if (!controller.signal.aborted) setDocumentPreviewError(error instanceof Error ? error.message : "The document preview could not be loaded.");
+      })
+      .finally(() => { if (!controller.signal.aborted) setDocumentPreviewLoading(false); });
+    return () => controller.abort();
+  }, [expandedDocument]);
   async function downloadImage() {
     if (!expandedImage) return;
     try {
@@ -302,7 +333,22 @@ function MessageView({
             ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
                 img: ({ src, alt }) => src
                   ? <button className="message-image-button" type="button" onClick={() => setExpandedImage({ src, alt: alt || "KOPLI AI image" })} aria-label="Open image full screen"><img src={src} alt={alt || "KOPLI AI image"} loading="lazy" /></button>
-                  : null
+                  : null,
+                a: ({ href, children }) => {
+                  if (!href) return <span>{children}</span>;
+                  let fileUrl: URL | null = null;
+                  try { fileUrl = new URL(href, window.location.origin); } catch {}
+                  const isFile = fileUrl?.origin === window.location.origin && fileUrl.pathname.startsWith("/api/files/");
+                  if (isFile && fileUrl) {
+                    const fileName = decodeURIComponent(fileUrl.pathname.split("/").pop() || "Generated document");
+                    return <button className="message-document-card" type="button" onClick={() => setExpandedDocument({ src: fileUrl!.pathname, title: fileName })}>
+                      <span className="message-document-icon"><FileText size={21} /></span>
+                      <span className="message-document-details"><strong>{fileName}</strong><small>Open document preview</small></span>
+                      <Eye size={18} aria-hidden="true" />
+                    </button>;
+                  }
+                  return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+                }
               }}>{message.content}</ReactMarkdown>
             : <div className="thinking-state" role="status"><span>Thinking</span></div>}
           {message.generationType && message.streaming && <div className="generation-card" role="status" aria-live="polite">
@@ -315,9 +361,19 @@ function MessageView({
           </div>}
         </div>
           {!!message.attachments?.length && <div className="message-attachments" aria-label="Message attachments">
-            {message.attachments.map((attachment, index) => attachment.previewUrl
-              ? <button className="message-image-button" type="button" key={`${attachment.fileName}-${index}`} onClick={() => setExpandedImage({ src: attachment.previewUrl!, alt: attachment.fileName })} aria-label={`Open ${attachment.fileName} full screen`}><img src={attachment.previewUrl} alt={attachment.fileName} /></button>
-              : <span key={`${attachment.fileName}-${index}`}><FileText size={16} />{attachment.fileName}</span>)}
+            {message.attachments.map((attachment, index) => {
+              if (attachment.previewUrl) return <button className="message-image-button" type="button" key={`${attachment.fileName}-${index}`} onClick={() => setExpandedImage({ src: attachment.previewUrl!, alt: attachment.fileName })} aria-label={`Open ${attachment.fileName} full screen`}><img src={attachment.previewUrl} alt={attachment.fileName} /></button>;
+              let attachmentUrl: URL | null = null;
+              try { if (attachment.url) attachmentUrl = new URL(attachment.url, window.location.origin); } catch {}
+              if (attachmentUrl?.origin === window.location.origin && attachmentUrl.pathname.startsWith("/api/files/")) {
+                return <button className="message-document-card" type="button" key={`${attachment.fileName}-${index}`} onClick={() => setExpandedDocument({ src: attachmentUrl!.pathname, title: attachment.fileName })}>
+                  <span className="message-document-icon"><FileText size={21} /></span>
+                  <span className="message-document-details"><strong>{attachment.fileName}</strong><small>{attachment.mimeType.split("/").pop()?.toUpperCase() || "Document"} · Open preview</small></span>
+                  <Eye size={18} aria-hidden="true" />
+                </button>;
+              }
+              return <span key={`${attachment.fileName}-${index}`}><FileText size={16} />{attachment.fileName}</span>;
+            })}
           </div>}
         {!isUser && !message.streaming && message.content && <div className="message-actions" aria-label="Response actions">
           <button type="button" aria-label="Copy response" title="Copy" onClick={() => onCopy(message.content)}><Copy size={16} /></button>
@@ -333,6 +389,24 @@ function MessageView({
           <button type="button" onClick={() => setExpandedImage(null)} aria-label="Close image" title="Close"><X size={19} /></button>
         </div>
         <img className="image-lightbox-image" src={expandedImage.src} alt={expandedImage.alt} onClick={event => event.stopPropagation()} />
+      </div>}
+      {expandedDocument && <div className="document-preview-backdrop" role="dialog" aria-modal="true" aria-label="Document preview" onClick={() => setExpandedDocument(null)}>
+        <section className="document-preview-dialog" onClick={event => event.stopPropagation()}>
+          <header className="document-preview-toolbar">
+            <span><FileText size={19} aria-hidden="true" /><strong title={expandedDocument.title}>{expandedDocument.title}</strong></span>
+            <a href={expandedDocument.src} download><Download size={17} /> Download</a>
+            <button type="button" onClick={() => setExpandedDocument(null)} aria-label="Close document preview"><X size={20} /></button>
+          </header>
+          <div className="document-preview-content">
+            {/\.pdf(?:$|\?)/i.test(expandedDocument.src)
+              ? <iframe title={expandedDocument.title} src={expandedDocument.src} />
+              : documentPreviewLoading
+                ? <div className="document-preview-fallback"><span className="document-preview-spinner" /><strong>Preparing preview…</strong></div>
+                : documentPreviewError
+                  ? <div className="document-preview-fallback"><FileText size={38} /><strong>Preview unavailable</strong><p>{documentPreviewError}</p><a href={expandedDocument.src} download><Download size={17} /> Download original</a></div>
+                  : <pre className="document-preview-text">{documentPreviewText}</pre>}
+          </div>
+        </section>
       </div>}
     </article>
   );
@@ -555,6 +629,17 @@ function App() {
     document.addEventListener("pointerdown", closeOutside);
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [attachmentMenuOpen]);
+  useEffect(() => {
+    if (!composerModeOpen && !chatActionsOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (composerModeOpen && !target.closest(".composer-mode-wrap")) setComposerModeOpen(false);
+      if (chatActionsOpen && !target.closest(".chat-actions-wrap")) setChatActionsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [composerModeOpen, chatActionsOpen]);
 
   useEffect(() => {
     const viewport = window.matchMedia("(max-width: 900px)");
@@ -904,7 +989,7 @@ function App() {
     const conversationId = activeId || makeId();
     const userMessage: ChatMessage = {
       id: makeId(), role: "user", content: text || "Please review the attached file.", createdAt: new Date().toISOString(),
-      attachments: files.map(file => ({ fileName: file.fileName, mimeType: file.mimeType, previewUrl: file.previewUrl }))
+      attachments: files.map(file => ({ fileName: file.fileName, mimeType: file.mimeType, previewUrl: file.previewUrl, url: file.url }))
     };
     const assistantId = makeId();
     setActiveId(conversationId);
@@ -933,7 +1018,7 @@ function App() {
           if (creationIntent.type === "image") {
             const result = await request<{ id: string; url: string; fileName: string; mimeType: string; imageData: string }>(
               "/api/images/generate",
-              jsonRequest("POST", { prompt: text, includePreview: true }),
+              { ...jsonRequest("POST", { prompt: text, includePreview: true }), signal: controller.signal },
               150000
             );
             const previewUrl = `data:${result.mimeType};base64,${result.imageData}`;
@@ -944,7 +1029,7 @@ function App() {
             const endpoint = format === "pdf" ? "/api/pdf/generate" : format === "pptx" ? "/api/presentations/generate" : "/api/documents/generate";
             const result = await request<{ id: string; url: string; fileName: string; mimeType: string; format: string }>(
               endpoint,
-              jsonRequest("POST", { content: text, format, includeContent: false }),
+              { ...jsonRequest("POST", { content: text, format, includeContent: false }), signal: controller.signal },
               150000
             );
             assistantContent = `Your ${format.toUpperCase()} file is ready.\n\n[Download ${result.fileName}](${result.url})`;
@@ -970,7 +1055,7 @@ function App() {
       if (imageLookupIntent) {
         const result = await request<{ query: string; images: Array<{ title: string; url: string; source: string }> }>(
           "/api/images/search",
-          jsonRequest("POST", { prompt: text }),
+          { ...jsonRequest("POST", { prompt: text }), signal: controller.signal },
           30000
         );
         const images = Array.isArray(result.images) ? result.images.slice(0, 4) : [];
@@ -990,13 +1075,13 @@ function App() {
         if (file.mimeType.startsWith("image/")) continue;
         const analysis = await request<{ text: string; truncated: boolean }>(
           `/api/files/${encodeURIComponent(file.id)}/analyze`,
-          jsonRequest("POST", { mimeType: file.mimeType })
+          { ...jsonRequest("POST", { mimeType: file.mimeType }), signal: controller.signal }
         );
         submittedText += `\n\n[Text extracted from ${file.fileName}${analysis.truncated ? " (truncated)" : ""}]\n${analysis.text.slice(0, 30000)}`;
       }
       const hasImages = files.some(file => file.mimeType.startsWith("image/"));
       if (mode === "research" && !hasImages) {
-        const result = await request<{ answer: string; sources: Source[]; conversationId?: string }>("/api/chat/search", jsonRequest("POST", { message: submittedText, conversationId }));
+        const result = await request<{ answer: string; sources: Source[]; conversationId?: string }>("/api/chat/search", { ...jsonRequest("POST", { message: submittedText, conversationId }), signal: controller.signal }, 120000);
         setActiveId(result.conversationId || conversationId);
         setMessages(previous => previous.map(message => message.id === assistantId
           ? { ...message, content: result.answer, sources: result.sources, streaming: false }
@@ -1072,7 +1157,7 @@ function App() {
       if (files.length) setUploadedFiles(files);
       if (!aborted && text) setPrompt(text);
       setMessages(previous => previous.map(message => message.id === assistantId
-        ? { ...message, content: aborted ? (message.content || "Response stopped.") : `Unable to complete the request: ${errorText(error)}`, streaming: false }
+        ? { ...message, content: aborted ? (message.content ? `${message.content}\n\n(Response stopped.)` : "Response stopped.") : message.content ? `${message.content}\n\n(Response interrupted: ${errorText(error)})` : `Unable to complete the request: ${errorText(error)}`, streaming: false }
         : message));
     } finally {
       window.clearTimeout(requestTimeout);
@@ -1532,8 +1617,8 @@ function App() {
                 {section === "Chat" && <>
                     <section className="chat-shell" aria-label="Chat">
             {messages.length === 0 ? <div className="welcome">
-              <div className="welcome-hen" data-state={assistantVisualState}><img className="hen-image" src="/logo.png" alt="KOPLI AI" /></div>
-              <h1>What can I help you with?</h1><p>Think, create, explore and discover with KOPLI AI.</p>
+              <h1>{user ? `Hi ${user.name?.trim().split(/\s+/)[0] || user.email.split("@")[0].split(/[._-]/)[0]}, welcome back` : "What can I help you with?"}</h1>
+              <p>What would you like to work on today?</p>
               <div className="suggestions">
                 {["Explain a topic simply", "Help me plan a project", "Write or improve code", "Research a topic"].map((item, index) => <button key={item} onClick={() => { setPrompt(item); textareaRef.current?.focus(); }}><span>{item}</span>{index === 2 ? <Code2 size={17} /> : index === 3 ? <Globe2 size={17} /> : <Sparkles size={17} />}</button>)}
               </div>
@@ -1572,8 +1657,6 @@ function App() {
                         <button type="button" role="menuitem" onClick={() => { setAttachmentMenuOpen(false); setCameraError(""); setCapturedPhoto(null); setCameraOpen(true); }}><Camera size={18} /><span><strong>Camera</strong><small>Capture a photo</small></span></button>
                         <button type="button" role="menuitem" onClick={() => { setAttachmentMenuOpen(false); photoInputRef.current?.click(); }}><Images size={18} /><span><strong>Photos</strong><small>Choose images</small></span></button>
                         <button type="button" role="menuitem" onClick={() => { setAttachmentMenuOpen(false); fileInputRef.current?.click(); }}><Files size={18} /><span><strong>Files</strong><small>Documents and archives</small></span></button>
-                        <div className="attachment-menu-unavailable" aria-disabled="true"><Code2 size={18} /><span><strong>Plugins</strong><small>No plugin integrations are configured</small></span></div>
-                        <button type="button" role="menuitem" aria-pressed={mode === "reasoning"} onClick={() => { setMode("reasoning"); setAttachmentMenuOpen(false); }}><Brain size={18} /><span><strong>Think Harder</strong><small>Use deeper reasoning</small></span></button>
                       </div>}
                     </div>
                     <button className={`composer-button${mode === "research" ? " search-on" : ""}`} type="button" aria-label="Toggle research mode" title="Research mode" onClick={() => setMode(value => value === "research" ? "smart" : "research")}><Globe2 size={18} /></button>

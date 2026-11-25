@@ -1,67 +1,49 @@
-# KOPLI AI – Automated Test Results
+# KOPLI AI – Test and Verification Record
 
-## 1. Executive Summary
+## Current audit branch
+Branch: `audit/production-cleanup-hardening`
 
-- **Total Automated Unit & Integration Tests**: 14 (Vitest) + 12 (Live Endpoint Suite)
-- **Real External Integrations Verified**: 4/4 (Groq, Tavily, Stability AI, PostgreSQL)
-- **TypeScript Typecheck**: **PASS** (0 errors)
-- **Production Build (`vite build`)**: **PASS** (Zero warnings, clean bundle)
-- **Prisma Client & Migration**: **PASS** (Database schema up to date, 0 pending migrations)
-- **Final Verdict**: **ALL INTEGRATIONS VERIFIED & PASSING**
+The branch changes include:
+- Removed stale Render runtime references from the API.
+- Removed the obsolete Render keep-awake workflow.
+- Removed unnecessary `GH_PAT` use from GitHub Actions checkout and limited workflow permissions to repository read.
+- Made Vercel file upload and file generation fail closed when Supabase Storage is not configured.
+- Made the health endpoint return an unready status when required persistent file storage is missing.
+- Updated deployment, environment, architecture, and security documentation to reflect Vercel + Supabase.
 
----
+## Checks available in repository CI
+The CI workflow runs:
+- dependency audit report
+- ESLint if a lint script exists
+- TypeScript type-check
+- Vitest test suite
+- production build (Prisma client generation, TypeScript build, server bundle, Vite build)
 
-## 2. Real Integration Verification Results
+## Dependency audit details
+The latest verified npm audit reports 0 vulnerabilities across the lockfile. The refreshed lockfile passed npm ci and npm audit --audit-level=high; high/critical findings now fail CI.
 
-| Integration / Service | Credentials Configured | Live Test Performed | Result | Status |
-|---|---|---|---|---|
-| **Groq Cloud API** | `GROQ_API_KEY` (56 chars) | Streamed live chat completion via `POST /api/chat` | Successfully returned streaming tokens attributing creator Pranesh KK | **PASS (LIVE VERIFIED)** |
-| **Tavily Search API** | `TAVILY_API_KEY` (54 chars) | Live web query via `POST /api/search` | Returned 5 real internet news sources with valid URLs | **PASS (LIVE VERIFIED)** |
-| **Web Research AI Chat** | Groq + Tavily combined | Live web search synthesis via `POST /api/chat/search` | Returned 4,605-character synthesis citing 5 live web sources | **PASS (LIVE VERIFIED)** |
-| **Stability AI** | `STABILITY_API_KEY` (51 chars) | Account authentication check via Stability AI API | Returned `Account Verified` without consuming generation credits | **PASS (LIVE VERIFIED)** |
-| **PostgreSQL Database** | `DATABASE_URL` (92 chars) | Prisma migration deploy, user register, session cookie, chat persistence | Auto-migrated schema, created user, verified session, persisted conversations | **PASS (LIVE VERIFIED)** |
-| **Admin Authorization** | `KOPLI_OWNER_EMAIL` | Dual-verification role checking in server auth | Owner access granted to specified email; 403 for unauthorized users | **PASS (LIVE VERIFIED)** |
 
----
+## Latest verified CI run
+- Head commit: `6f0e40c8309a05db1cf1dcdafbf384c7fc729634`
+- GitHub Actions run: [45552436857](https://github.com/krishnamoorthhipranesh-bot/kopli-ai/actions/runs/45552436857)
+- Result: PASS; build job completed successfully (lint, TypeScript, tests, production build included by workflow).
+- The dependency audit is still informational and reported 7 high-severity findings in the audit inventory.
+- A Vercel Preview for this exact head and real visual/mobile QA remain unverified.
 
-## 3. Vitest Test Suite Results
+## Latest branch verification
+- GitHub CI run #119: PASS — dependency install, strict npm audit, lint, TypeScript, 23 tests, and production build.
+- Dependency lock refresh workflow run #8: PASS — npm ci, strict audit, TypeScript, 23 tests, and production build; regenerated package-lock.json committed.
+- Vercel exact-head Preview remains blocked by the account's daily deployment cap; no visual browser/Android device QA is claimed.
 
-Command: `npm test` (`vitest run`)
+## Production baseline previously inspected
+- Vercel production deployment at commit `cb3b8d96fed86c6bb62fb70ba47e9488a989a045` was `READY`.
+- Supabase project status was `ACTIVE_HEALTHY`.
+- The inspected Vercel runtime error/fatal log window contained no matching entries.
+- `SUPABASE_SERVICE_ROLE_KEY` was missing from the inspected Vercel environment-variable names; durable file storage was not verified.
+- Full real-provider integration tests, durable file round-trips across serverless instances, browser E2E, and physical Android QA were not performed in that inspection.
 
-| Test File | Test Case | Expected Result | Actual Result | Status |
-|---|---|---|---|---|
-| `server/memory-utils.test.ts` | Generic recall prompts recognition | `isPastContextQuery` returns `true`, keywords empty | Matched | **PASS** |
-| `server/memory-utils.test.ts` | Keeps project terms, drops filler | Extracted `["kopli", "website", "project"]` | Matched | **PASS** |
-| `server/memory-utils.test.ts` | Secret detection vs normal text | Secrets detected (`true`), normal text allowed (`false`) | Matched | **PASS** |
-| `server/server.test.ts` | Origin check: no origin header | Allows requests from same-origin/curl (`true`) | Matched | **PASS** |
-| `server/server.test.ts` | Origin check: localhost & 127.0.0.1 | Allows development ports (`true`) | Matched | **PASS** |
-| `server/server.test.ts` | Origin check: Render subdomains | Allows `*.onrender.com` origins (`true`) | Matched | **PASS** |
-| `server/server.test.ts` | Origin check: same-host header | Allows matching host header (`true`) | Matched | **PASS** |
-| `server/server.test.ts` | Origin check: malicious domains | Blocks unauthorized cross-origin (`false`) | Matched | **PASS** |
-| `server/server.test.ts` | Secret check: database connection URL | Detects database password in URL (`true`) | Matched | **PASS** |
-| `server/server.test.ts` | Secret check: Groq API key format | Detects `gsk_...` key (`true`) | Matched | **PASS** |
-| `server/server.test.ts` | Secret check: OpenAI/Tavily format | Detects `sk-...` key (`true`) | Matched | **PASS** |
-| `server/server.test.ts` | Secret check: password discussion | Allows conversational mentions (`false`) | Matched | **PASS** |
-| `server/server.test.ts` | Past context query detection | Matches `yesterday`, `stopped`, `previous chat` | Matched | **PASS** |
-| `server/server.test.ts` | Stopwords filtering | Filters `you`, `the`, `for`, `can`, extracts keywords | Matched | **PASS** |
+## Dependency lockfile
+`package.json` and `package-lock.json` are now aligned. CI uses `npm ci --include=dev` and the strict npm audit script.
 
----
-
-## 4. Live Server Endpoint Suite Results
-
-Verified against running Express production server instance on `http://localhost:8787`:
-
-| Endpoint / Action | Expected Result | Actual Result | Status |
-|---|---|---|---|
-| `GET /api/status` | HTTP 200 with JSON provider health | HTTP 200 returned (`groq: true`, `tavily: true`, `stability: true`, `database: true`, `demo: false`) | **PASS** |
-| `GET /api/auth/me` | HTTP 200 with unauthenticated or session state | HTTP 200 returned | **PASS** |
-| `POST /api/chat` (Real Prompt) | HTTP 200 SSE stream from Groq LLM | Real-time token streaming from Groq completed | **PASS** |
-| `POST /api/chat` (`/admin` command) | HTTP 403 when unauthenticated | HTTP 403 returned: "Admin access is restricted." | **PASS** |
-| `GET /api/admin/status` | HTTP 403 when unauthenticated | HTTP 403 returned | **PASS** |
-| `POST /api/search` (Real Query) | HTTP 200 with real web search results | Returned 5 live web search sources from Tavily | **PASS** |
-| `GET /.env` | HTTP 404 blocked | HTTP 404 returned (Protected segment) | **PASS** |
-| `GET /server/index.ts` | HTTP 404 blocked | HTTP 404 returned (Protected segment) | **PASS** |
-| `GET /` | HTTP 200 HTML document | HTTP 200 returned | **PASS** |
-| `GET /chat/coding` | HTTP 200 SPA route rendered | HTTP 200 returned | **PASS** |
-| CORS Origin: `https://kopli-ai.onrender.com` | HTTP 200 allowed | HTTP 200 returned | **PASS** |
-| CORS Origin: `https://attacker.evil.com` | HTTP 403 blocked | Blocked with cross-origin error | **PASS** |
+## Reporting rule
+A deployment marked READY proves deployment status only. It does not prove successful authentication, AI streaming, research, file persistence, or email delivery.
