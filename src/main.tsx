@@ -272,6 +272,9 @@ function MessageView({
   const isUser = message.role === "user";
   const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null);
   const [expandedDocument, setExpandedDocument] = useState<{ src: string; title: string } | null>(null);
+  const [documentPreviewText, setDocumentPreviewText] = useState("");
+  const [documentPreviewLoading, setDocumentPreviewLoading] = useState(false);
+  const [documentPreviewError, setDocumentPreviewError] = useState("");
   useEffect(() => {
     if (!expandedImage && !expandedDocument) return;
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -280,6 +283,30 @@ function MessageView({
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [expandedImage, expandedDocument]);
+  useEffect(() => {
+    if (!expandedDocument || /\.pdf(?:$|\?)/i.test(expandedDocument.src)) {
+      setDocumentPreviewText("");
+      setDocumentPreviewError("");
+      setDocumentPreviewLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    const filePath = expandedDocument.src.replace(/[?#].*$/, "").replace(/\/+$/, "");
+    setDocumentPreviewText("");
+    setDocumentPreviewError("");
+    setDocumentPreviewLoading(true);
+    void fetch(`${filePath}/preview`, { credentials: "include", signal: controller.signal })
+      .then(async response => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || `Preview failed (${response.status}).`);
+        setDocumentPreviewText(String(body.text || ""));
+      })
+      .catch(error => {
+        if (!controller.signal.aborted) setDocumentPreviewError(error instanceof Error ? error.message : "The document preview could not be loaded.");
+      })
+      .finally(() => { if (!controller.signal.aborted) setDocumentPreviewLoading(false); });
+    return () => controller.abort();
+  }, [expandedDocument]);
   async function downloadImage() {
     if (!expandedImage) return;
     try {
@@ -359,9 +386,13 @@ function MessageView({
             <button type="button" onClick={() => setExpandedDocument(null)} aria-label="Close document preview"><X size={20} /></button>
           </header>
           <div className="document-preview-content">
-            {/\.pdf($|\?)/i.test(expandedDocument.src)
+            {/\.pdf(?:$|\?)/i.test(expandedDocument.src)
               ? <iframe title={expandedDocument.title} src={expandedDocument.src} />
-              : <div className="document-preview-fallback"><FileText size={38} /><strong>{expandedDocument.title}</strong><p>This file opens with your device's document viewer. Download it to view or edit the full document.</p><a href={expandedDocument.src} download><Download size={17} /> Download document</a></div>}
+              : documentPreviewLoading
+                ? <div className="document-preview-fallback"><span className="document-preview-spinner" /><strong>Preparing preview…</strong></div>
+                : documentPreviewError
+                  ? <div className="document-preview-fallback"><FileText size={38} /><strong>Preview unavailable</strong><p>{documentPreviewError}</p><a href={expandedDocument.src} download><Download size={17} /> Download original</a></div>
+                  : <pre className="document-preview-text">{documentPreviewText}</pre>}
           </div>
         </section>
       </div>}
