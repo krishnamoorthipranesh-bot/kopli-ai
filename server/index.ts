@@ -92,6 +92,84 @@ const storage = process.env.VERCEL ? path.join("/tmp", "kopli-ai-storage") : pat
 const generated = path.join(storage, "generated");
 const uploads = path.join(storage, "uploads");
 for (const dir of [storage, generated, uploads]) fs.mkdirSync(dir, { recursive: true });
+const storageBucket = process.env.SUPABASE_STORAGE_BUCKET?.trim() || "kopli-user-files";
+const persistentStorageConfigured = () => configured(process.env.SUPABASE_URL) && configured(process.env.SUPABASE_SERVICE_ROLE_KEY);
+function storageObjectUrl(objectPath: string) {
+  const base = process.env.SUPABASE_URL?.trim().replace(/\\/+$/, "");
+  if (!base || !persistentStorageConfigured()) throw new Error("Persistent file storage is not configured.");
+  const encodedPath = objectPath.split("/").map(segment => encodeURIComponent(segment)).join("/");
+  return `${base}/storage/v1/object/${storageBucket}/${encodedPath}`;
+}
+async function uploadPersistentObject(objectPath: string, bytes: Buffer, mimeType: string) {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  const response = await fetch(storageObjectUrl(objectPath), {
+    method: "POST",
+    headers: { apikey: key || "", Authorization: `Bearer ${key || ""}`, "Content-Type": mimeType, "x-upsert": "true" },
+    body: new Uint8Array(bytes),
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok) {
+    const status = response.status;
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error(`Persistent storage upload failed (HTTP ${status}).`);
+  }
+}
+async function downloadPersistentObject(objectPath: string): Promise<Buffer> {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  const url = storageObjectUrl(objectPath).replace("/storage/v1/object/", "/storage/v1/object/authenticated/");
+  const response = await fetch(url, {
+    headers: { apikey: key || "", Authorization: `Bearer ${key || ""}` },
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error("The stored file could not be retrieved.");
+  }
+  return Buffer.from(await response.arrayBuffer());
+}
+async function deletePersistentObject(objectPath: string) {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+  const base = process.env.SUPABASE_URL?.trim().replace(/\\/+$/, "");
+  if (!base || !key) throw new Error("Persistent file storage is not configured.");
+  const response = await fetch(`${base}/storage/v1/object/${storageBucket}`, {
+    method: "DELETE",
+    headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ prefixes: [objectPath] }),
+    signal: AbortSignal.timeout(30000)
+  });
+  if (!response.ok && response.status !== 404) throw new Error("The stored file could not be deleted.");
+}
+function persistentObjectPath(userId: string, kind: string, id: string, name: string) {
+  const extension = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 12);
+  return `${userId}/${kind}/${id}${extension}`;
+}
+async function saveUserFile(args: { id: string; userId: string; name: string; mimeType: string; bytes: Buffer; kind: string; localPath: string }) {
+  if (!prisma) throw new Error("File metadata database is unavailable.");
+  let storedPath = args.localPath;
+  if (process.env.VERCEL && persistentStorageConfigured()) {
+    const objectPath = persistentObjectPath(args.userId, args.kind, args.id, args.name);
+    await uploadPersistentObject(objectPath, args.bytes, args.mimeType);
+    storedPath = `supabase://${objectPath}`;
+  }
+  try {
+    await prisma.storedFile.create({ data: {
+      id: args.id, userId: args.userId, name: args.name, mimeType: args.mimeType,
+      size: args.bytes.length, path: storedPath, kind: args.kind
+    } });
+  } catch (error) {
+    if (storedPath.startsWith("supabase://")) await deletePersistentObject(storedPath.slice("supabase://".length)).catch(() => undefined);
+    throw error;
+  }
+  if (storedPath.startsWith("supabase://")) await fs.promises.unlink(args.localPath).catch(() => undefined);
+  return storedPath;
+}
+async function readUserFile(record: { path: string } | null | undefined, fallbackPath?: string): Promise<Buffer | null> {
+  if (record?.path.startsWith("supabase://")) return downloadPersistentObject(record.path.slice("supabase://".length));
+  const localPath = record?.path || fallbackPath;
+  if (!localPath || !fs.existsSync(localPath)) return null;
+  return fs.promises.readFile(localPath);
+}
+
 
 const conversations = new Map<string, { id: string; title: string; archived: boolean; pinned: boolean; mode: string; messages: Array<{ role: "user" | "assistant"; content: string }> }>();
 const configured = (value?: string) => Boolean(value && !/^YOUR_/i.test(value) && !/^replace_/i.test(value));
@@ -297,8 +375,7 @@ const allowedMimeTypes = new Set([
   "image/webp",
   "image/gif"
 ]);
-function hasValidFileSignature(filePath: string, mimeType: string) {
-  const bytes = fs.readFileSync(filePath);
+function hasValidFileSignatureBytes(bytes: Buffer, mimeType: string) {
   if (mimeType === "image/png") return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
   if (mimeType === "image/jpeg") return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   if (mimeType === "image/webp") return bytes.length >= 12 && bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP";
@@ -311,6 +388,9 @@ function hasValidFileSignature(filePath: string, mimeType: string) {
     return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1]));
   }
   return ["text/plain","text/csv","text/markdown","application/json","text/rtf","application/rtf"].includes(mimeType);
+}
+function hasValidFileSignature(filePath: string, mimeType: string) {
+  return hasValidFileSignatureBytes(fs.readFileSync(filePath), mimeType);
 }
 
 const zipTextExtensions = new Set([".txt", ".md", ".csv", ".json", ".xml", ".html", ".css", ".js", ".ts", ".tsx", ".jsx", ".py", ".java", ".go", ".rs", ".sql", ".yaml", ".yml", ".toml"]);
