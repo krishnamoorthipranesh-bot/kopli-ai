@@ -53,6 +53,7 @@ app.use(helmet({
 export function isAllowedOrigin(origin?: string, hostHeader?: string): boolean {
   if (!origin) return true;
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
+  if (process.env.RENDER_EXTERNAL_URL && origin.toLowerCase() === process.env.RENDER_EXTERNAL_URL.toLowerCase()) return true;
   for (const vercelHost of [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]) {
     if (vercelHost && origin.toLowerCase() === `https://${vercelHost.toLowerCase()}`) return true;
   }
