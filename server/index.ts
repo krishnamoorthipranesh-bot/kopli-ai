@@ -21,7 +21,7 @@ const require = createRequire(import.meta.url);
 const PptxGenJS = require("pptxgenjs");
 import rateLimit from "express-rate-limit";
 import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
+import pdfParse from "pdf-parse";
 import * as XLSX from "xlsx";
 import { tavily } from "@tavily/core";
 import { PrismaClient } from "@prisma/client";
@@ -1574,10 +1574,8 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
     let text = "";
     let method = "";
     if (mimeType === "application/pdf" || fileId.toLowerCase().endsWith(".pdf")) {
-      const parser = new PDFParse({ data: fs.readFileSync(file) });
-      const parsed = await parser.getText();
+      const parsed = await pdfParse(fs.readFileSync(file));
       text = parsed.text;
-      await parser.destroy();
       method = "PDF text extraction";
     } else if (mimeType.includes("wordprocessingml") || fileId.toLowerCase().endsWith(".docx")) {
       const parsed = await mammoth.extractRawText({ buffer: fs.readFileSync(file) });
