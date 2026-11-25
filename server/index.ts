@@ -42,7 +42,7 @@ app.use(helmet({
       imgSrc: ["'self'", "data:", "blob:", "https:"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
-      connectSrc: ["'self'", "https://api.groq.com", "https://api.tavily.com", "https://api.stability.ai"],
+      connectSrc: ["'self'", "https://api.groq.com", "https://api.tavily.com", "https://api.stability.ai", "https://api.cloudflare.com"],
       frameSrc: ["'none'"],
       objectSrc: ["'none'"],
       baseUri: ["'self'"],
@@ -1586,7 +1586,7 @@ app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || "";
   const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim() || "";
   if (!configured(accountId) || !configured(apiToken)) {
-    return res.status(503).json({ error: "Cloudflare image generation is not configured on the server. The Cloudflare Account ID and Workers AI API token must be set in Render." });
+    return res.status(503).json({ error: "Cloudflare image generation is not configured on the server. The Cloudflare Account ID and Workers AI API token must be set in Vercel." });
   }
 
   const aspectRatio = String(req.body?.aspectRatio || "1:1");
@@ -1702,6 +1702,49 @@ app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
   });
 });
 
+app.post("/api/images/edit", imageGenerationRateLimit, async (req, res) => {
+  const user = await currentUser(req);
+  if (!user) return res.status(401).json({ error: "Sign in to edit images." });
+  const prompt = String(req.body?.prompt || "").trim();
+  if (!prompt) return res.status(400).json({ error: "Describe the changes you want to make." });
+  if (prompt.length > 1500) return res.status(400).json({ error: "Image edit prompts must be 1,500 characters or fewer." });
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || "";
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim() || "";
+  if (!configured(accountId) || !configured(apiToken)) return res.status(503).json({ error: "Cloudflare image editing is not configured. Check the encrypted Cloudflare credentials in Vercel." });
+  const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(String(req.body?.imageData || ""));
+  if (!match) return res.status(400).json({ error: "Choose a valid PNG, JPEG, or WebP image to edit." });
+  const mimeType = "image/" + match[1];
+  const sourceBytes = Buffer.from(match[2], "base64");
+  if (!sourceBytes.length || sourceBytes.length > 2 * 1024 * 1024 || !hasValidFileSignatureBytes(sourceBytes, mimeType)) return res.status(400).json({ error: "The source image is invalid or too large. Use an image resized to 512 × 512 or smaller." });
+  try {
+    const form = new FormData();
+    form.set("prompt", prompt);
+    form.set("input_image_0", new Blob([new Uint8Array(sourceBytes)], { type: mimeType }), "source." + (match[1] === "jpeg" ? "jpg" : match[1]));
+    form.set("width", "1024");
+    form.set("height", "1024");
+    const response = await fetch("https://api.cloudflare.com/client/v4/accounts/" + encodeURIComponent(accountId) + "/ai/run/@cf/black-forest-labs/flux-2-klein-4b", { method: "POST", headers: { Authorization: "Bearer " + apiToken }, body: form, signal: AbortSignal.timeout(120000) });
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => "")).slice(0, 300);
+      console.error("Cloudflare Workers AI image edit returned HTTP", response.status, detail);
+      return res.status(response.status === 429 ? 429 : response.status >= 500 ? 502 : response.status).json({ error: response.status === 401 || response.status === 403 ? "Cloudflare rejected the Workers AI token. Check its Workers AI Read permission and Account ID." : response.status === 429 ? "Cloudflare image editing is rate limited or out of available quota. Please try again later." : "Cloudflare image editing failed (HTTP " + response.status + "). Please try again." });
+    }
+    const payload = await response.json().catch(() => null);
+    const imageBase64 = typeof payload?.result?.image === "string" ? payload.result.image : typeof payload?.result === "string" ? payload.result : typeof payload?.image === "string" ? payload.image : "";
+    if (!imageBase64) return res.status(502).json({ error: "Cloudflare did not return an edited image." });
+    const outputBytes = Buffer.from(imageBase64, "base64");
+    const outputMime = outputBytes.length >= 8 && outputBytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) ? "image/png" : outputBytes.length >= 3 && outputBytes[0] === 0xff && outputBytes[1] === 0xd8 && outputBytes[2] === 0xff ? "image/jpeg" : outputBytes.length >= 12 && outputBytes.subarray(0, 4).toString() === "RIFF" && outputBytes.subarray(8, 12).toString() === "WEBP" ? "image/webp" : "";
+    if (!outputMime || !outputBytes.length) return res.status(502).json({ error: "Cloudflare returned invalid edited image bytes." });
+    const id = crypto.randomUUID();
+    const extension = outputMime === "image/jpeg" ? "jpg" : outputMime.slice("image/".length);
+    const file = path.join(generated, id + "." + extension);
+    await fs.promises.writeFile(file, outputBytes);
+    await saveUserFile({ id, userId: user.id, name: id + "." + extension, mimeType: outputMime, bytes: outputBytes, kind: "image", localPath: file });
+    return res.json({ id, url: "/api/images/" + id, fileName: "KOPLI_AI_EDIT_" + id.slice(0, 8) + "." + extension, mimeType: outputMime, ...(req.body?.includePreview === true ? { imageData: outputBytes.toString("base64") } : {}) });
+  } catch (error) {
+    console.error("Cloudflare image editing failed.", error);
+    return res.status(502).json({ error: "Image editing could not be completed. Check provider availability and persistent storage, then try again." });
+  }
+});
 app.get("/api/images/:imageId", async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to view generated images." });
