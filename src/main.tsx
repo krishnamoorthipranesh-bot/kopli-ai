@@ -36,7 +36,7 @@ interface ChatMessage {
   content: string;
   createdAt?: string;
   sources?: Source[];
-  attachments?: Array<{ fileName: string; mimeType: string; previewUrl?: string }>;
+  attachments?: Array<{ fileName: string; mimeType: string; previewUrl?: string; url?: string }>;
   streaming?: boolean;
   generationType?: "image" | "document";
   progress?: number;
@@ -361,9 +361,19 @@ function MessageView({
           </div>}
         </div>
           {!!message.attachments?.length && <div className="message-attachments" aria-label="Message attachments">
-            {message.attachments.map((attachment, index) => attachment.previewUrl
-              ? <button className="message-image-button" type="button" key={`${attachment.fileName}-${index}`} onClick={() => setExpandedImage({ src: attachment.previewUrl!, alt: attachment.fileName })} aria-label={`Open ${attachment.fileName} full screen`}><img src={attachment.previewUrl} alt={attachment.fileName} /></button>
-              : <span key={`${attachment.fileName}-${index}`}><FileText size={16} />{attachment.fileName}</span>)}
+            {message.attachments.map((attachment, index) => {
+              if (attachment.previewUrl) return <button className="message-image-button" type="button" key={`${attachment.fileName}-${index}`} onClick={() => setExpandedImage({ src: attachment.previewUrl!, alt: attachment.fileName })} aria-label={`Open ${attachment.fileName} full screen`}><img src={attachment.previewUrl} alt={attachment.fileName} /></button>;
+              let attachmentUrl: URL | null = null;
+              try { if (attachment.url) attachmentUrl = new URL(attachment.url, window.location.origin); } catch {}
+              if (attachmentUrl?.origin === window.location.origin && attachmentUrl.pathname.startsWith("/api/files/")) {
+                return <button className="message-document-card" type="button" key={`${attachment.fileName}-${index}`} onClick={() => setExpandedDocument({ src: attachmentUrl!.pathname, title: attachment.fileName })}>
+                  <span className="message-document-icon"><FileText size={21} /></span>
+                  <span className="message-document-details"><strong>{attachment.fileName}</strong><small>{attachment.mimeType.split("/").pop()?.toUpperCase() || "Document"} · Open preview</small></span>
+                  <Eye size={18} aria-hidden="true" />
+                </button>;
+              }
+              return <span key={`${attachment.fileName}-${index}`}><FileText size={16} />{attachment.fileName}</span>;
+            })}
           </div>}
         {!isUser && !message.streaming && message.content && <div className="message-actions" aria-label="Response actions">
           <button type="button" aria-label="Copy response" title="Copy" onClick={() => onCopy(message.content)}><Copy size={16} /></button>
@@ -979,7 +989,7 @@ function App() {
     const conversationId = activeId || makeId();
     const userMessage: ChatMessage = {
       id: makeId(), role: "user", content: text || "Please review the attached file.", createdAt: new Date().toISOString(),
-      attachments: files.map(file => ({ fileName: file.fileName, mimeType: file.mimeType, previewUrl: file.previewUrl }))
+      attachments: files.map(file => ({ fileName: file.fileName, mimeType: file.mimeType, previewUrl: file.previewUrl, url: file.url }))
     };
     const assistantId = makeId();
     setActiveId(conversationId);
