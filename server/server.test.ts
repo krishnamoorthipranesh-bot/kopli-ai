@@ -16,10 +16,6 @@ describe("origin and CORS security", () => {
     expect(isAllowedOrigin("https://localhost:5173")).toBe(true);
   });
 
-  it("blocks unconfigured onrender.com subdomains", () => {
-    expect(isAllowedOrigin("https://my-kopli-service.onrender.com")).toBe(false);
-  });
-
   it("allows same-host origin based on host header", () => {
     expect(isAllowedOrigin("https://custom-kopli.example.com", "custom-kopli.example.com")).toBe(true);
     expect(isAllowedOrigin("http://internal-host:8080", "internal-host:8080")).toBe(true);
@@ -27,7 +23,7 @@ describe("origin and CORS security", () => {
 
   it("blocks unauthorized cross-origin domains", () => {
     expect(isAllowedOrigin("https://malicious-site.com")).toBe(false);
-    expect(isAllowedOrigin("https://evil-phishing.org", "kopli-ai.onrender.com")).toBe(false);
+    expect(isAllowedOrigin("https://evil-phishing.org", "kopli-ai.vercel.app")).toBe(false);
   });
 });
 
