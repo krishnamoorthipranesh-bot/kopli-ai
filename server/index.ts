@@ -826,6 +826,12 @@ const researchRateLimit = createCostLimiter(60 * 1000, 10, "Research request lim
 const imageSearchRateLimit = createCostLimiter(60 * 1000, 20, "Image search limit reached. Please wait a minute and try again.");
 const imageGenerationRateLimit = createCostLimiter(15 * 60 * 1000, 5, "Image generation limit reached. Please wait 15 minutes before generating more images.");
 const uploadRateLimit = createCostLimiter(15 * 60 * 1000, 20, "Upload limit reached. Please wait before uploading more files.");
+const requirePersistentFileStorage: express.RequestHandler = (_req, res, next) => {
+  if (process.env.VERCEL && !persistentStorageConfigured()) {
+    return res.status(503).json({ error: "Persistent file storage is not configured. Configure Supabase Storage in Vercel before generating or saving files." });
+  }
+  return next();
+};
 const documentRateLimit = createCostLimiter(15 * 60 * 1000, 8, "Document generation limit reached. Please wait 15 minutes before creating more files.");
 
 const authRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-7", legacyHeaders: false });
@@ -1558,7 +1564,7 @@ app.post("/api/images/search", imageSearchRateLimit, async (req, res) => {
   }
 });
 
-app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
+app.post("/api/images/generate", imageGenerationRateLimit, requirePersistentFileStorage, async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to generate images." });
   const prompt = String(req.body?.prompt || "").trim();
@@ -2103,9 +2109,9 @@ app.post("/api/documents/export", documentRateLimit, async (req, res) => {
   }
 });
 
-app.post("/api/documents/generate", documentRateLimit, generateFile);
-app.post("/api/presentations/generate", documentRateLimit, generateFile);
-app.post("/api/pdf/generate", documentRateLimit, generateFile);
+app.post("/api/documents/generate", documentRateLimit, requirePersistentFileStorage, generateFile);
+app.post("/api/presentations/generate", documentRateLimit, requirePersistentFileStorage, generateFile);
+app.post("/api/pdf/generate", documentRateLimit, requirePersistentFileStorage, generateFile);
 
 app.get("/api/files/:fileName", async (req, res) => {
   const user = await currentUser(req);
