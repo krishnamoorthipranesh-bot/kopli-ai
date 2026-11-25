@@ -16,7 +16,7 @@ This document tracks the feature sets being adapted into the existing KOPLI AI a
 ## First implementation phase
 
 - Add authenticated POST /api/images/edit.
-- Accept PNG, JPEG, and WebP input images up to 8 MB.
+- Accept PNG, JPEG, and WebP input images up to 3 MB.
 - Validate file signatures, restrict the Cloudflare model allowlist, prevent redirect-based URL fetching, and cap downloaded output at 16 MB.
 - Store generated edits using the existing private Supabase-backed storage flow.
 - Add an AI Image Editor tool to Explore with upload, prompt, preview, and download.
