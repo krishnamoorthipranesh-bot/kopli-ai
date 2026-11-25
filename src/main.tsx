@@ -294,8 +294,8 @@ function MessageView({
       window.open(expandedImage.src, "_blank", "noopener,noreferrer");
     }
   }
-  const documentDownload = !isUser && message.generationType === "document"
-    ? message.content.match(/\\[Download ([^\\]]+)\\]\\(([^)]+)\\)/)
+  const documentDownload = !isUser
+    ? message.content.match(/\\[Download ([^\\]]+\\.(?:docx|pdf|pptx|xlsx))\\]\\(([^)]+)\\)/i)
     : null;
   const visibleMessageContent = documentDownload
     ? message.content.replace(/\\n*\\[Download [^\\]]+\\]\\([^)]+\\)/, "").trim()
