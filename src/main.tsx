@@ -1444,7 +1444,10 @@ function App() {
         const response = await fetch("/api/images/edit", { method: "POST", credentials: "include", body: form });
         const result = await response.json().catch(() => ({})) as { fileName?: string; mimeType?: string; imageData?: string; error?: string };
         if (!response.ok || !result.imageData) throw new ApiError(result.error || `Image editing failed (${response.status}).`, response.status);
-        setToolResult({ fileName: result.fileName || "KOPLI_AI_Edited.png", mimeType: result.mimeType || "image/png", previewUrl: `data:${result.mimeType || "image/png"};base64,${result.imageData}` });
+        const previewUrl = `data:${result.mimeType || "image/png"};base64,${result.imageData}`;
+        const fileName = result.fileName || "KOPLI_AI_Edited.png";
+        setToolResult({ fileName, mimeType: result.mimeType || "image/png", previewUrl });
+        setImageHistory(previous => [{ prompt: `Edit: ${toolPrompt}`, previewUrl, fileName }, ...previous.filter(item => item.previewUrl !== previewUrl)].slice(0, 5));
       } else if (toolType === "docx") {
         const result = await request<{ title: string; content: string }>("/api/documents/draft", jsonRequest("POST", { prompt: toolPrompt, title: toolTitle || undefined }));
         setToolResult({ title: result.title, content: result.content, fileName: `${result.title}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
