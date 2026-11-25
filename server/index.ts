@@ -2183,10 +2183,11 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
 });
 
 app.get(["/health", "/api/health"], (_req, res) => {
-  const ready = databaseStatus !== "unavailable" && databaseStatus !== "starting";
+  const ready = databaseStatus === "ready";
   const fileStorageReady = !process.env.VERCEL || persistentStorageConfigured();
+  const status = ready && fileStorageReady ? "ok" : "degraded";
   return res.status(ready ? 200 : 503).json({
-    status: ready ? "ok" : "degraded",
+    status,
     ready,
     persistence: databaseStatus,
     fileStorage: fileStorageReady ? "persistent" : "temporary",
