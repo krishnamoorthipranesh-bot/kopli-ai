@@ -93,6 +93,9 @@ const uploads = path.join(storage, "uploads");
 for (const dir of [storage, generated, uploads]) fs.mkdirSync(dir, { recursive: true });
 const storageBucket = process.env.SUPABASE_STORAGE_BUCKET?.trim() || "kopli-user-files";
 const persistentStorageConfigured = () => configured(process.env.SUPABASE_URL) && configured(process.env.SUPABASE_SERVICE_ROLE_KEY);
+export function shouldRejectEphemeralFileStorage(isVercel: boolean, persistentStorageIsConfigured: boolean) {
+  return isVercel && !persistentStorageIsConfigured;
+}
 function storageObjectUrl(objectPath: string) {
   const base = process.env.SUPABASE_URL?.trim().replace(/\/+$/, "");
   if (!base || !persistentStorageConfigured()) throw new Error("Persistent file storage is not configured.");
@@ -144,6 +147,9 @@ function persistentObjectPath(userId: string, kind: string, id: string, name: st
 }
 async function saveUserFile(args: { id: string; userId: string; name: string; mimeType: string; bytes: Buffer; kind: string; localPath: string }) {
   if (!prisma) throw new Error("File metadata database is unavailable.");
+  if (shouldRejectEphemeralFileStorage(Boolean(process.env.VERCEL), persistentStorageConfigured())) {
+    throw new Error("Persistent file storage is not configured. Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel before saving files.");
+  }
   let storedPath = args.localPath;
   if (process.env.VERCEL && persistentStorageConfigured()) {
     const objectPath = persistentObjectPath(args.userId, args.kind, args.id, args.name);
@@ -2201,6 +2207,22 @@ app.get(["/health", "/api/health"], (_req, res) => {
   const status = ready && fileStorageReady ? "ok" : "degraded";
   return res.status(ready ? 200 : 503).json({
     status,
+    ready,
+    persistence: databaseStatus,
+    fileStorage: fileStorageReady ? "persistent" : "temporary",
+    fileStorageConfigured: fileStorageReady
+  });
+});
+
+app.get("/health", (_req, res) => res.status(200).json({ status: "ok", live: true }));
+
+// Readiness requires both a live database connection and durable file storage.
+app.get("/api/health", (_req, res) => {
+  const databaseReadyNow = databaseStatus === "ready";
+  const fileStorageReady = !shouldRejectEphemeralFileStorage(Boolean(process.env.VERCEL), persistentStorageConfigured());
+  const ready = databaseReadyNow && fileStorageReady;
+  return res.status(ready ? 200 : 503).json({
+    status: ready ? "ok" : "degraded",
     ready,
     persistence: databaseStatus,
     fileStorage: fileStorageReady ? "persistent" : "temporary",
