@@ -484,7 +484,14 @@ app.post("/api/voice/transcribe", rateLimit({
   limit: 20,
   standardHeaders: "draft-7",
   legacyHeaders: false
-}), voiceUpload.single("audio"), async (req, res) => {
+}), async (req, res, next) => {
+  try {
+    if (!await currentUser(req)) return res.status(401).json({ error: "Sign in to use voice transcription." });
+    return next();
+  } catch {
+    return res.status(503).json({ error: "Account verification is temporarily unavailable. Please try again." });
+  }
+}, voiceUpload.single("audio"), async (req, res) => {
   const audioPath = req.file?.path;
   if (!audioPath) return res.status(400).json({ error: "Record a voice message before transcribing." });
   try {
