@@ -52,6 +52,9 @@ export function isAllowedOrigin(origin?: string, hostHeader?: string): boolean {
   if (!origin) return true;
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
   if (process.env.RENDER_EXTERNAL_URL && origin.toLowerCase() === process.env.RENDER_EXTERNAL_URL.toLowerCase()) return true;
+  for (const vercelHost of [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]) {
+    if (vercelHost && origin.toLowerCase() === `https://${vercelHost.toLowerCase()}`) return true;
+  }
   if (/^https:\/\/[a-z0-9-]+\.onrender\.com$/i.test(origin)) return true;
   if (process.env.ALLOWED_ORIGINS) {
     const list = process.env.ALLOWED_ORIGINS.split(",").map(item => item.trim().toLowerCase());
@@ -83,7 +86,7 @@ app.use(rateLimit({
 }));
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const storage = path.join(root, "storage");
+const storage = process.env.VERCEL ? path.join("/tmp", "kopli-ai-storage") : path.join(root, "storage");
 const generated = path.join(storage, "generated");
 const uploads = path.join(storage, "uploads");
 for (const dir of [storage, generated, uploads]) fs.mkdirSync(dir, { recursive: true });
@@ -1964,19 +1967,20 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
   res.status(status >= 400 && status < 600 ? status : 500).json({ error: status === 413 ? "The request is too large." : "The request could not be completed." });
 });
 
-app.get("/health", (_req, res) => res.json({
+app.get(["/health", "/api/health"], (_req, res) => res.json({
   status: databaseStatus === "unavailable" ? "degraded" : databaseStatus === "starting" ? "starting" : "ok",
   ready: true,
   persistence: databaseStatus
 }));
 
-app.use(express.static(path.join(root, "dist")));
-app.get("/chat/:mode", (_req, res) => {
+if (!process.env.VERCEL) app.use(express.static(path.join(root, "dist")));
+if (!process.env.VERCEL) app.get("/chat/:mode", (_req, res) => {
   const indexFile = path.join(root, "dist", "index.html");
   if (!fs.existsSync(indexFile)) return res.status(500).json({ error: "Built application index is missing." });
   res.type("html").send(fs.readFileSync(indexFile));
 });
 app.use((_req, res) => {
+  if (process.env.VERCEL) return res.status(404).json({ error: "API route not found." });
   const indexFile = path.join(root, "dist", "index.html");
   if (!fs.existsSync(indexFile)) return res.status(500).json({ error: "Built application index is missing." });
   res.type("html").send(fs.readFileSync(indexFile));
