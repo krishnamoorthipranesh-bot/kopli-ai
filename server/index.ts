@@ -138,13 +138,17 @@ async function deletePersistentObject(objectPath: string) {
   });
   if (!response.ok && response.status !== 404) throw new Error("The stored file could not be deleted.");
 }
+export function shouldRejectEphemeralFileStorage(isVercel: boolean, persistentStorageIsConfigured: boolean) {
+  return isVercel && !persistentStorageIsConfigured;
+}
+
 function persistentObjectPath(userId: string, kind: string, id: string, name: string) {
   const extension = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 12);
   return `${userId}/${kind}/${id}${extension}`;
 }
 async function saveUserFile(args: { id: string; userId: string; name: string; mimeType: string; bytes: Buffer; kind: string; localPath: string }) {
   if (!prisma) throw new Error("File metadata database is unavailable.");
-  if (process.env.VERCEL && !persistentStorageConfigured()) {
+  if (shouldRejectEphemeralFileStorage(Boolean(process.env.VERCEL), persistentStorageConfigured())) {
     throw new Error("Persistent file storage is not configured. Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel before saving files.");
   }
   let storedPath = args.localPath;
@@ -2202,7 +2206,7 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
 
 app.get(["/health", "/api/health"], (_req, res) => {
   const ready = databaseStatus === "ready";
-  const fileStorageReady = !process.env.VERCEL || persistentStorageConfigured();
+  const fileStorageReady = !shouldRejectEphemeralFileStorage(Boolean(process.env.VERCEL), persistentStorageConfigured());
   const status = ready && fileStorageReady ? "ok" : "degraded";
   return res.status(ready && fileStorageReady ? 200 : 503).json({
     status,
