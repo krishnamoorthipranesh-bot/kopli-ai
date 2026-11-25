@@ -411,6 +411,7 @@ function App() {
   const [toolResult, setToolResult] = useState<ExploreResult | null>(null);
   const [toolPreview, setToolPreview] = useState(false);
   const [toolStyle, setToolStyle] = useState("");
+  const [toolNegativePrompt, setToolNegativePrompt] = useState("");
   const [toolAspect, setToolAspect] = useState("1:1");
   const [toolImageFormat, setToolImageFormat] = useState("png");
   const [toolProviders, setToolProviders] = useState<{ groq?: boolean; cloudflareAi?: boolean } | null>(null);
@@ -1416,7 +1417,7 @@ function App() {
     setToolResult(null);
     try {
       if (toolType === "image") {
-        const result = await request<{ fileName: string; mimeType: string; imageData: string }>("/api/images/generate", jsonRequest("POST", { prompt: toolPrompt, aspectRatio: toolAspect, stylePreset: toolStyle, outputFormat: toolImageFormat, includePreview: true }));
+        const result = await request<{ fileName: string; mimeType: string; imageData: string }>("/api/images/generate", jsonRequest("POST", { prompt: toolPrompt, negativePrompt: toolNegativePrompt, aspectRatio: toolAspect, stylePreset: toolStyle, outputFormat: toolImageFormat, includePreview: true }));
         const previewUrl = `data:${result.mimeType};base64,${result.imageData}`;
         setToolResult({ fileName: result.fileName, mimeType: result.mimeType, previewUrl });
         setImageHistory(previous => [{ prompt: toolPrompt, previewUrl, fileName: result.fileName }, ...previous.filter(item => item.previewUrl !== previewUrl)].slice(0, 5));
@@ -1646,10 +1647,11 @@ function App() {
             <form onSubmit={event => void generateContent(event)}>
               {toolType !== "image" && toolType !== "edit" && <label className="explore-field"><span>Title <small>(optional)</small></span><input className="chat-search" value={toolTitle} onChange={event => setToolTitle(event.target.value)} maxLength={160} placeholder="Give your file a title" /></label>}
               {toolType === "image" && <div className="explore-image-options">
-                <label className="explore-field"><span>Style</span><select className="chat-search" value={toolStyle} onChange={event => setToolStyle(event.target.value)}><option value="">Automatic</option><option value="photographic">Photographic</option><option value="digital-art">Digital art</option><option value="3d-model">3D</option><option value="cinematic">Cinematic</option><option value="anime">Anime</option><option value="isometric">Isometric</option><option value="line-art">Line art</option></select></label>
+                <label className="explore-field"><span>Style</span><select className="chat-search" value={toolStyle} onChange={event => setToolStyle(event.target.value)}><option value="">Automatic</option><option value="enhance">Enhanced</option><option value="photographic">Photographic</option><option value="digital-art">Digital art</option><option value="cinematic">Cinematic</option><option value="anime">Anime</option><option value="fantasy-art">Fantasy art</option><option value="comic-book">Comic book</option><option value="3d-model">3D render</option><option value="isometric">Isometric</option><option value="line-art">Line art</option><option value="analog-film">Analog film</option><option value="neon-punk">Neon punk</option><option value="low-poly">Low poly</option><option value="origami">Origami</option><option value="modeling-compound">Clay art</option><option value="pixel-art">Pixel art</option><option value="tile-texture">Tile texture</option></select></label>
                 <label className="explore-field"><span>Aspect ratio</span><select className="chat-search" value={toolAspect} onChange={event => setToolAspect(event.target.value)}>{["1:1","16:9","3:2","4:5","2:3","9:16","21:9","5:4"].map(value => <option key={value}>{value}</option>)}</select></label>
                 <label className="explore-field"><span>File type</span><select className="chat-search" value={toolImageFormat} onChange={event => setToolImageFormat(event.target.value)}><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></label>
               </div>}
+              {toolType === "image" && <label className="explore-field"><span>Negative prompt <small>(optional · things to avoid)</small></span><input className="chat-search" value={toolNegativePrompt} onChange={event => setToolNegativePrompt(event.target.value)} maxLength={500} placeholder="blurry, extra fingers, text, watermark…" /></label>}
               {toolType === "edit" && <div className="explore-field">
                 <span>Upload image <small>(PNG, JPEG, or WebP · max 8 MB)</small></span>
                 <input className="chat-search" type="file" accept="image/png,image/jpeg,image/webp" onChange={event => {
