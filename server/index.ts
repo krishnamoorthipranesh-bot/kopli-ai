@@ -1792,7 +1792,7 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
       method = "DOCX text extraction";
     } else if (mimeType.includes("spreadsheet") || /\.(xlsx|xls|csv)$/i.test(fileId)) {
       const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.load(fileBytes);
+      await workbook.xlsx.load(Buffer.from(fileBytes) as unknown as Buffer);
       const cellText = (value: unknown): string => {
         if (value === null || value === undefined) return "";
         if (value instanceof Date) return value.toISOString();
@@ -1808,7 +1808,11 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
       text = workbook.worksheets.map(sheet => {
         const rows: string[] = [];
         sheet.eachRow({ includeEmpty: false }, row => {
-          rows.push(row.values.slice(1).map(cellText).join("\t"));
+          const values: string[] = [];
+          row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+            values[columnNumber - 1] = cellText(cell.value);
+          });
+          rows.push(values.join("\t"));
         });
         return `## ${sheet.name}\n${rows.join("\n")}`;
       }).join("\n\n");
