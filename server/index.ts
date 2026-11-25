@@ -1150,7 +1150,7 @@ app.post("/api/chat", async (req, res) => {
           model: imageInputs.length ? aiConfig.groqVisionModel : aiConfig.groqModel,
           messages,
           temperature: mode === "coding" ? 0.2 : mode === "reasoning" ? 0.4 : 0.7,
-          ...(mode === "fast" ? { max_tokens: 800 } : {}),
+          max_tokens: 8192,
           stream: true
         });
         let streamed = "";
