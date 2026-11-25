@@ -1085,3 +1085,10 @@
 .admin-user-row span { color:var(--text-secondary);font-size:11px;overflow-wrap:anywhere; }
 .admin-user-row select { min-width:95px;padding:7px 9px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--text-primary); }
 @media (max-width:700px) { .admin-stat-grid { grid-template-columns:repeat(2,minmax(0,1fr));gap:9px; }.admin-stat { min-height:92px;padding:13px; }.admin-stat strong { font-size:23px; } }
+
+
+.image-edit-comparison { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-items:start; }
+.image-edit-comparison figure { display:grid;gap:8px;min-width:0;margin:0; }
+.image-edit-comparison figcaption { color:var(--text-secondary);font-size:12px;font-weight:650; }
+.image-edit-comparison .generated-image-preview { width:100%;max-height:520px;object-fit:contain;border:1px solid var(--line);border-radius:13px;background:var(--surface); }
+@media (max-width:560px) { .image-edit-comparison { grid-template-columns:1fr; }.image-edit-comparison .generated-image-preview { max-height:420px; } }
