@@ -1,40 +1,42 @@
-# KOPLI AI – Environment Variable Specification
+# KOPLI AI – Environment Variables Specification
 
-All secrets must remain server-side. Never use `VITE_` prefixes for credentials, commit secret values, print them in logs, or paste them into chat.
+This document lists all environment variables utilized by the **KOPLI AI** backend.
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `DATABASE_URL` | Required for accounts/history | Supabase PostgreSQL connection for Prisma |
-| `GROQ_API_KEY` | Required for AI chat | Groq inference |
-| `GROQ_MODEL` | Optional | Text model override |
-| `GROQ_VISION_MODEL` | Optional | Vision model override |
-| `SUPABASE_URL` | Required for persistent files | Supabase project API URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Required for persistent files | Server-only Storage access; never expose to browser |
-| `SUPABASE_STORAGE_BUCKET` | Optional | Defaults to private bucket `kopli-user-files` |
-| `CLOUDFLARE_ACCOUNT_ID` | Required for image generation | Cloudflare account identifier |
-| `CLOUDFLARE_API_TOKEN` | Required for image generation | Workers AI token; server-only |
-| `TAVILY_API_KEY` | Optional | Live web research |
-| `RESEND_API_KEY` | Optional | Account recovery email |
-| `RESEND_FROM_EMAIL` / `EMAIL_FROM` | Optional | Accepted Resend sender identity |
-| `SESSION_SECRET` | Required for secure sessions | Random server-side HMAC/session secret |
-| `KOPLI_ADMIN_SECRET` | Optional | Admin verification / fallback secret |
-| `KOPLI_OWNER_EMAIL` | Recommended | Owner account email |
-| `APP_URL` | Recommended | Defaults to https://kopli-ai.vercel.app |
-| `ALLOWED_ORIGINS` | Optional | Comma-separated additional origins |
-| `PORT` | Local only | Defaults to 8787 |
+> **CRITICAL SECURITY NOTE**: All API keys, secrets, and database credentials must remain on the server. Never commit `.env` files to git, and never expose private keys in frontend bundles.
 
-## Vercel configuration
+---
 
-Set Production and Preview variables in Vercel Project → Settings → Environment Variables. Use encrypted/secret visibility for all credentials. The service-role key must be a server-only variable and must not be exposed in any client bundle.
+## 1. Environment Variable Reference
 
-## Persistent file storage
+| Variable Name | Required? | Default / Example | Purpose |
+|---|---|---|---|
+| `GROQ_API_KEY` | Optional (Activates live AI) | `gsk_...` | API key from Groq to power high-speed LLM reasoning, code generation, and chat completions. |
+| `GROQ_MODEL` | Optional | `openai/gpt-oss-120b` | Groq model identifier (alternatives: `llama-3.3-70b-versatile`, `mixtral-8x7b-32768`). |
+| `TAVILY_API_KEY` | Optional (Activates live search) | `tvly-...` | API key from Tavily to enable real-time internet search and citation retrieval. |
+| `STABILITY_API_KEY` | Optional (Activates image gen) | `sk-...` | API key from Stability AI to generate Stable Diffusion visual content in Explore mode. |
+| `DATABASE_URL` | Optional (Activates cloud DB) | `postgresql://user:pass@host:5432/db` | PostgreSQL connection string for user accounts, chat persistence, memory, and file metadata. |
+| `SUPABASE_URL` | Required for persistent file storage | `https://project-ref.supabase.co` | Supabase project URL used by the server-side Storage adapter. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Required for persistent file storage | Server-only secret | Server-side Storage access. Never expose this key in frontend code, browser storage, public logs or Git. |
+| `SUPABASE_STORAGE_BUCKET` | Optional | `kopli-user-files` | Existing private bucket for user uploads and generated files. |
+| `KOPLI_OWNER_EMAIL` | Recommended | `owner@example.com` | Email address designated as the administrator and project owner. Accounts matching this email receive the `owner` role automatically upon registration or login. |
+| `KOPLI_ADMIN_SECRET` | Recommended | 32+ char random hex string | Random secret key used for administrative verification and fallback session signing. Automatically generated in Render via `render.yaml`. |
+| `SESSION_SECRET` | Recommended | 32+ char random hex string | Cryptographic secret key used to sign and verify HMAC-SHA256 session cookies (`kopli_session`). Automatically generated in Render via `render.yaml`. |
+| `PORT` | Optional | `8787` (local), `10000` (Render) | HTTP port on which the Express server listens. Render automatically injects this value. |
+| `RENDER_EXTERNAL_URL` | Optional | `https://kopli-ai.onrender.com` | Automatically supplied by Render to denote the public HTTPS URL for CORS and origin validation. |
+| `ALLOWED_ORIGINS` | Optional | `https://customdomain.com` | Comma-separated list of additional allowed cross-origin domains (e.g. for custom domain mappings). |
+| `NODE_ENV` | Optional | `production` | Node environment identifier. Enables production cookie security flags (`Secure`, `SameSite=Lax`). |
 
-The Vercel deployment requires both `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The existing `kopli-user-files` bucket must remain private. Without these settings, file upload and file-generation endpoints must return an explicit 503; Vercel `/tmp` is temporary and must never be represented as durable storage.
+---
 
-## Email behavior
+## 2. Persistent file storage
 
-Signup is intentionally allowed without email verification. Password recovery requires a working Resend API key and a sender accepted by Resend. If the sender is not configured/verified, recovery must report the failure rather than claim an email was sent.
+The Vercel deployment must have `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` configured as server-only Production and Preview environment variables. The existing `kopli-user-files` bucket is private. Without the service-role key, Vercel can only use temporary `/tmp` storage; the `/api/health` endpoint reports this as `fileStorageConfigured: false`. Never add the service-role key to a `VITE_` or `NEXT_PUBLIC_` variable.
 
-## Legacy deployment artifacts
+## 3. Default Fallback Behavior ("Demo Mode")
 
-`render.yaml` and Docker configuration are retained only for rollback reference. They are not the production deployment path.
+KOPLI AI is designed with an active fallback layer:
+- If `GROQ_API_KEY` is omitted: The server answers with helpful setup guidance and identifies creator **Pranesh KK**.
+- If `DATABASE_URL` is omitted: Guest conversations persist in browser `localStorage`.
+- If `TAVILY_API_KEY` is omitted: The search endpoint returns an informative 503 notification explaining demo status without crashing.
+- If `STABILITY_API_KEY` is omitted: The image generator returns a friendly notice to configure the key in the backend.
+- Document creation (Word `.docx`, PowerPoint `.pptx`, PDF reports, Excel `.xlsx`) continues to function using rich built-in academic and professional templates even in demo mode!

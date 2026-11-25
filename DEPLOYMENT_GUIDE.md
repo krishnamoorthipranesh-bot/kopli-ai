@@ -1,55 +1,101 @@
-# KOPLI AI – Vercel + Supabase Production Deployment
+# KOPLI AI – Production Deployment Guide (Render)
 
-This is the production deployment path. Do not deploy the production application to Render.
+This guide provides step-by-step instructions to deploy **KOPLI AI** to **Render** with high reliability and zero downtime.
 
-## Architecture
-- Vercel serves the Vite/React frontend and the Express API through `api/handler.ts`.
-- Supabase PostgreSQL is accessed through Prisma using `DATABASE_URL`.
-- Private Supabase Storage bucket: `kopli-user-files`.
-- Groq handles chat/vision, Cloudflare Workers AI handles image generation, and Tavily handles web research.
-- Resend is optional and requires a sender address/domain accepted by Resend.
+---
 
-## Vercel environment variables
+## 1. Prerequisites
 
-Set values in Vercel Project → Settings → Environment Variables. Keep secrets encrypted and server-only.
+1. A free or paid account at [Render.com](https://render.com).
+2. GitHub repository access to `https://github.com/krishnamoorthipranesh-bot/kopli-ai.git`.
+3. API credentials for full feature activation (optional for initial deployment; KOPLI AI boots in demo mode without them):
+   - **Groq API Key**: [console.groq.com](https://console.groq.com)
+   - **Tavily API Key**: [app.tavily.com](https://app.tavily.com)
+   - **Stability AI API Key**: [platform.stability.ai](https://platform.stability.ai)
+   - **PostgreSQL Database URL**: Any PostgreSQL provider (Neon, Supabase, or Render Postgres).
 
-| Variable | Requirement | Notes |
-|---|---|---|
-| `DATABASE_URL` | Required | Supabase PostgreSQL connection URL; use the appropriate Supabase pooler/direct endpoint for Prisma |
-| `GROQ_API_KEY` | Required for AI chat | Server-only |
-| `GROQ_MODEL` | Optional | Defaults in server config |
-| `GROQ_VISION_MODEL` | Optional | Defaults in server config |
-| `SESSION_SECRET` | Required for secure sessions | Use a long random secret |
-| `SUPABASE_URL` | Required for persistent files | Project API URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Required for persistent files | Server-only; never use a public/publishable key here |
-| `SUPABASE_STORAGE_BUCKET` | Optional | Defaults to `kopli-user-files`; bucket must remain private |
-| `CLOUDFLARE_ACCOUNT_ID` | Required for image generation | Server-only configuration |
-| `CLOUDFLARE_API_TOKEN` | Required for image generation | Workers AI permissions; server-only |
-| `TAVILY_API_KEY` | Optional | Enables live web research |
-| `RESEND_API_KEY` | Optional | Password recovery email |
-| `EMAIL_FROM` or `RESEND_FROM_EMAIL` | Optional | Sender must be accepted/verified by Resend |
-| `APP_URL` | Recommended | https://kopli-ai.vercel.app |
-| `ALLOWED_ORIGINS` | Optional | Comma-separated allowed browser origins |
-| `KOPLI_OWNER_EMAIL` | Recommended | Owner account email |
-| `KOPLI_ADMIN_SECRET` | Optional | Server-side admin secret |
+---
 
-Set the correct targets (Production and Preview) before deploying. Do not paste credentials into chat or commit them to GitHub.
+## 2. Deployment Method A: Blueprint Deployment (Recommended)
 
-## Deployment and verification
+1. Log in to [Render Dashboard](https://dashboard.render.com).
+2. Click **New +** in the top navigation and select **Blueprint**.
+3. Connect your GitHub account and select repository:
+   `krishnamoorthipranesh-bot/kopli-ai`
+4. Render will read `render.yaml` from the repository root:
+   - **Service Name**: `kopli-ai`
+   - **Runtime**: `Docker`
+   - **Health Check Path**: `/api/status`
+   - **Auto-generated Secrets**: `KOPLI_ADMIN_SECRET`, `SESSION_SECRET`
+5. In the environment variables prompt, enter your values:
+   - `GROQ_API_KEY`: Your Groq API key
+   - `TAVILY_API_KEY`: Your Tavily API key
+   - `STABILITY_API_KEY`: Your Stability AI API key
+   - `DATABASE_URL`: Your PostgreSQL connection string
+   - `KOPLI_OWNER_EMAIL`: Your primary admin email (e.g. `owner@example.com`)
+6. Click **Apply**.
+7. Render will build the Docker container and deploy the service.
 
-1. Confirm the Vercel project is connected to this repository and production branch `master`.
-2. Confirm all required environment-variable names exist for the intended target; inspect names only, never decrypt secrets for a report.
-3. Confirm the Supabase project is active and the private `kopli-user-files` bucket exists.
-4. Push reviewed code through the repository's normal Git/Vercel integration.
-5. Wait for Vercel deployment state `READY` and verify the commit SHA.
-6. Check `/`, `/health`, `/api/health`, `/api/status`, auth, chat, streaming, and file upload/download using a test account.
-7. Verify uploaded bytes can be retrieved after a separate serverless invocation and after a new deployment.
+---
 
-## Readiness rules
+## 3. Deployment Method B: Manual Web Service Deployment
 
-- `/api/health` must report database and persistent file storage ready. A missing Supabase service-role key is a blocker, not a successful deployment.
-- Do not rely on `/tmp` for permanent files.
-- Do not claim email recovery works until a real Resend send succeeds with an accepted sender.
-- Do not apply destructive migrations or change production database URLs without a verified backup and explicit approval.
+If you prefer to configure the Web Service manually:
 
-Legacy `render.yaml` and Docker files are retained only as rollback artifacts and are not used by the production architecture.
+1. Click **New +** -> **Web Service**.
+2. Select your repository: `krishnamoorthipranesh-bot/kopli-ai`.
+3. Configure the service settings:
+   - **Name**: `kopli-ai`
+   - **Region**: Choose the closest region (e.g., Singapore, Frankfurt, Oregon, Ohio).
+   - **Branch**: `master`
+   - **Runtime**: **Docker**
+   - **Instance Type**: **Free**
+4. Expand **Advanced**:
+   - **Health Check Path**: `/api/status`
+5. Under **Environment Variables**, add the following keys:
+   | Key | Value / Instructions |
+   |---|---|
+   | `GROQ_API_KEY` | Your Groq API key |
+   | `TAVILY_API_KEY` | Your Tavily API key |
+   | `STABILITY_API_KEY` | Your Stability AI API key |
+   | `DATABASE_URL` | Your PostgreSQL database URL |
+   | `KOPLI_OWNER_EMAIL` | Owner email address |
+   | `KOPLI_ADMIN_SECRET` | 32+ character random string |
+   | `SESSION_SECRET` | 32+ character random string |
+   | `GROQ_MODEL` | `openai/gpt-oss-120b` (or `llama-3.3-70b-versatile`) |
+6. Click **Create Web Service**.
+
+---
+
+## 4. Database Setup & Automated Migrations
+
+When you supply a PostgreSQL `DATABASE_URL`:
+- The server automatically executes `npx prisma migrate deploy` on startup.
+- All tables, indexes, constraints, and relations defined in `prisma/migrations/0_init/migration.sql` are applied immediately.
+- If you use **Supabase** or **Neon**:
+  - In Supabase, use the **Transaction / Session pooling** connection string or Direct URL on port 5432 / 6543.
+  - In Neon, use the connection string with `?sslmode=require`.
+
+---
+
+## 5. Post-Deployment Verification Checklist
+
+1. **Check Live Status**: Visit `https://<your-service-name>.onrender.com/api/status`. Ensure it returns HTTP 200 with JSON:
+   ```json
+   {
+     "groq": true,
+     "tavily": true,
+     "stability": true,
+     "database": true,
+     "demo": false,
+     "model": "openai/gpt-oss-120b"
+   }
+   ```
+2. **Load Web App**: Open `https://<your-service-name>.onrender.com`. Ensure the dashboard loads without layout shift or console errors.
+3. **Register Owner Account**:
+   - Click "Sign in or create account".
+   - Register using the email configured in `KOPLI_OWNER_EMAIL`.
+   - Your account is automatically granted `owner` role.
+4. **Test AI Chat**: Send a message in "Smart" mode and confirm real-time streaming tokens.
+5. **Test Web Search**: Send a message in "Research" mode or visit "Web Search" and confirm live web results.
+6. **Test Explore Tools**: Generate a sample DOCX, PDF, PPTX or Image.

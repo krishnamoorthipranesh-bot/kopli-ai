@@ -1,0 +1,22 @@
+name: Keep KOPLI AI available
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Request the primary Render service health endpoint
+        shell: bash
+        run: >-
+          curl --retry 1 --retry-delay 3 --retry-connrefused
+          --connect-timeout 10 --max-time 75 --fail --silent --show-error
+          --output /dev/null https://kopli-ai-1.onrender.com/health
