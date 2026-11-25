@@ -1562,7 +1562,7 @@ function App() {
             {!user && <div className="explore-provider-note"><strong>Sign in to create and download files</strong><span>Generated files are private to your account.</span><button type="button" onClick={() => openAccountAuth()}>Sign in</button></div>}
             {user && toolProviders && ((toolType === "image" && !toolProviders.cloudflareAi) || (toolType !== "image" && !toolProviders.groq)) && <div className="explore-provider-note" role="status">
               <strong>{toolType === "image" ? "Image generation needs provider setup" : "AI file generation needs provider setup"}</strong>
-              <span>{toolType === "image" ? "Configure CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in Render to enable image generation." : "Configure GROQ_API_KEY in the existing service to enable document generation."}</span>
+              <span>{toolType === "image" ? "Configure CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in Vercel to enable image generation." : "Configure GROQ_API_KEY in Vercel to enable document generation."}</span>
             </div>}
             <div className="explore-form-heading"><div><span className="eyebrow">KOPLI AI TOOL</span><h2>{({image:"Image generation",docx:"Documents",pdf:"PDF reports",pptx:"Presentations",xlsx:"Spreadsheets"})[toolType]}</h2></div>{toolResult && <button type="button" className="explore-text-action" onClick={() => { setToolResult(null); setToolPreview(false); }}>Clear result</button>}</div>
             <form onSubmit={event => void generateContent(event)}>
