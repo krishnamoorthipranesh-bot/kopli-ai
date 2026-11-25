@@ -25,6 +25,15 @@ Last reviewed against repository branch `master`, Vercel project configuration, 
 - RLS is enabled on the existing public tables; no policies were present in the previous advisor review. The application uses server-side Prisma access. Do not add broad policies without reviewing the actual Data API exposure and access model.
 - No complete external penetration test or production load test has been performed.
 
+
+## Latest targeted chat UI changes (branch only)
+- Empty-chat center logo removed; signed-in greeting uses the account's first name.
+- Generated and uploaded images open in a full-screen viewer with download.
+- Generated and uploaded document links/cards open an authenticated in-chat viewer. PDFs render inline; office/text formats use extracted-text preview with download fallback.
+- Document preview extraction has a per-user/IP rate limit and a server-side file ownership check.
+- Composer, attachment and chat-action menus have outside-click handling, bounded scroll heights, and responsive sizing.
+- These are targeted improvements, not a completed full visual redesign. The latest-head Preview is not yet available for visual verification.
+
 ## Work in progress
 - Branch `audit/production-cleanup-hardening` removes stale Render production references, removes the Render keep-awake workflow, removes unnecessary `GH_PAT` use from CI, and makes file-generation/upload endpoints fail closed when persistent storage is not configured.
 - These branch changes are not production-complete until CI, Preview, and Production verification pass.
