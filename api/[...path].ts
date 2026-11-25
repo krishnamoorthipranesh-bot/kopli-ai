@@ -1,4 +1,4 @@
-import { app, initializeDatabase } from "../server/index.js";
+import { app, initializeDatabase } from "../server/index.ts";
 
 let databaseInitialization: Promise<void> | undefined;
 
