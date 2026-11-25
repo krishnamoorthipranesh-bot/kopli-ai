@@ -29,9 +29,9 @@ The Vercel environment-variable inventory did not include `SUPABASE_SERVICE_ROLE
 - The CI workflow used an unnecessary personal access token for checkout; the audit branch removes it.
 - An obsolete workflow pinged Render every five minutes; the audit branch removes it.
 - Old Render/Docker files are retained as rollback artifacts only, not used in the production request path.
-- Package and lockfile declarations are inconsistent; deterministic `npm ci` is not yet safe until the lockfile is regenerated and reviewed.
+- package-lock.json has been regenerated and committed. The verified lockfile passed `npm ci`, `npm audit --audit-level=high`, TypeScript, tests, and the production build.
 
 ## Not yet verified
-- Durable upload/download across separate serverless invocations and a new deployment.
+- Durable upload/download across separate serverless invocations and a new deployment remains blocked by the missing SUPABASE_SERVICE_ROLE_KEY.
 - Live Groq, Tavily, Cloudflare image generation, and Resend transactions in this audit session.
-- Full browser E2E, Android physical-device layout QA, and load/penetration testing.
+- Exact-head Vercel Preview is blocked by the daily deployment quota; full browser E2E, Android physical-device layout QA, and load/penetration testing remain outstanding.
