@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, feature/six-repo-upgrade ]
   pull_request:
     branches: [ master ]
 
@@ -31,4 +31,6 @@ jobs:
       - name: Test
         run: npm test --if-present
       - name: Build
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/kopli_ci
         run: npm run build
