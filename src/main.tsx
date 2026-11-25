@@ -295,10 +295,10 @@ function MessageView({
     }
   }
   const documentDownload = !isUser
-    ? message.content.match(/\\[Download ([^\\]]+\\.(?:docx|pdf|pptx|xlsx))\\]\\(([^)]+)\\)/i)
+    ? message.content.match(/\[Download ([^\]]+\.(?:docx|pdf|pptx|xlsx))\]\(([^)]+)\)/i)
     : null;
   const visibleMessageContent = documentDownload
-    ? message.content.replace(/\\n*\\[Download [^\\]]+\\]\\([^)]+\\)/, "").trim()
+    ? message.content.replace(/\n*\[Download [^\]]+\]\([^)]+\)/, "").trim()
     : message.content;
   async function shareDocument() {
     if (!documentDownload) return;
