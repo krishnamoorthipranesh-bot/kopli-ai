@@ -6,7 +6,7 @@ Updated: 2026-11-25
 
 - Added a server-side Supabase Storage adapter for the existing private `kopli-user-files` bucket.
 - Authenticated uploads and generated images/documents are written to user-scoped object paths when `SUPABASE_SERVICE_ROLE_KEY` is configured.
-- Guest uploads use random object names and expire through opportunistic cleanup after 24 hours.
+- Guest uploads use random object names; records older than 24 hours are cleaned opportunistically when a later guest upload arrives.
 - File download, analysis, library listing, rename and delete paths understand Supabase object references while retaining compatibility with older local paths.
 - Added endpoint-specific request limits for chat, search, image search/generation, upload and document generation.
 - Removed the wildcard Render-origin CORS allowance and reduced JSON request size.
