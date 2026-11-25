@@ -838,11 +838,12 @@ app.post("/api/auth/register", authRateLimit, async (req, res) => {
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(409).json({ error: "An account with this email already exists." });
     const passwordHash = await bcrypt.hash(password, 12);
-    const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
-    const role = ownerEmail && email === ownerEmail ? "owner" : "user";
-    const user = await prisma.user.create({ data: { email, name, passwordHash, role, emailVerified: true } });
-    await createSession(user.id, req, res);
-    res.status(201).json({ user: { email: user.email, name: user.name, role } });
+    // New accounts must prove control of their email address before they can sign in.
+    // Owner privileges are granted only after the configured owner email is verified.
+    const user = await prisma.user.create({
+      data: { email, name, passwordHash, role: "user", emailVerified: false }
+    });
+    res.status(201).json({ message: "Account created. Verify your email address before signing in." });
   } catch (error) {
     console.error("Account registration failed:", error);
     if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
@@ -861,9 +862,12 @@ app.post("/api/auth/login", authRateLimit, async (req, res) => {
     if (!user?.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
       return res.status(401).json({ error: "Invalid email or password." });
     }
-    const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
-    const role: "user" | "owner" = ownerEmail && user.email === ownerEmail ? "owner" : "user";
-    if (user.role !== role) await prisma.user.update({ where: { id: user.id }, data: { role } });
+    if (!user.emailVerified) {
+      return res.status(403).json({ error: "Please verify your email address before signing in. Use the resend verification option if you need a new link." });
+    }
+    // Never promote an account during login. Owner privileges are assigned only
+    // by the one-time email-verification flow or an authenticated administrator.
+    const role: "user" | "owner" = user.role === "owner" ? "owner" : "user";
     await createSession(user.id, req, res);
     res.json({ user: { email: user.email, name: user.name, role } });
   } catch (error) {
@@ -914,7 +918,11 @@ app.post("/api/auth/verify-email", authRateLimit, async (req, res) => {
       data: { usedAt: verifiedAt }
     });
     if (!consumed.count) throw new Error("Verification link was already used or expired.");
-    await tx.user.update({ where: { id: verification.userId }, data: { emailVerified: true } });
+    const verifiedUser = await tx.user.findUnique({ where: { id: verification.userId }, select: { email: true } });
+    if (!verifiedUser) throw new Error("The account for this verification link no longer exists.");
+    const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
+    const role = ownerEmail && verifiedUser.email.toLowerCase() === ownerEmail ? "owner" : "user";
+    await tx.user.update({ where: { id: verification.userId }, data: { emailVerified: true, role } });
     await tx.emailVerificationToken.deleteMany({ where: { userId: verification.userId, id: { not: verification.id } } });
   });
   res.json({ message: "Email verified. You can now sign in to KOPLI AI." });
