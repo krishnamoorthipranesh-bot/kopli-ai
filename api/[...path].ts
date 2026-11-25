@@ -7,10 +7,13 @@ export default async function handler(req: any, res: any) {
     await databaseInitialization;
     return app(req, res);
   } catch (error) {
-    console.error("KOPLI AI backend initialization failed:", error);
+    const message = error instanceof Error ? error.message : String(error);
+    const name = error instanceof Error ? error.name : "UnknownError";
+    console.error("KOPLI AI backend initialization failed:", name, message);
     return res.status(500).json({
       error: "Backend initialization failed.",
-      code: "BACKEND_INIT_FAILED"
+      code: "BACKEND_INIT_FAILED",
+      ...(process.env.VERCEL_ENV === "preview" ? { diagnostic: { name, message: message.slice(0, 300) } } : {})
     });
   }
 }
