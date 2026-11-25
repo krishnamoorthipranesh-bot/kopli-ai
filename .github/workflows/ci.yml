@@ -24,6 +24,8 @@ jobs:
         run: |
           npm audit --json > /tmp/kopli-npm-audit.json || true
           node -e 'const a=require("/tmp/kopli-npm-audit.json"); console.log("Dependency vulnerabilities:", JSON.stringify(a.metadata?.vulnerabilities || {})); for (const [name, item] of Object.entries(a.vulnerabilities || {})) console.log(name, JSON.stringify({severity:item.severity,range:item.range,fixAvailable:item.fixAvailable,via:item.via?.map(v=>typeof v==="string"?v:{title:v.title,url:v.url})}));'
+      - name: Enforce production dependency security
+        run: npm audit --omit=dev --audit-level=high
       - name: Lint
         run: npm run lint --if-present
       - name: TypeCheck
