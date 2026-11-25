@@ -1071,3 +1071,13 @@
     transition-duration: .01ms !important;
   }
 }
+
+
+/* Real microphone RMS-reactive recording indicator. The mic button remains fixed. */
+.voice-live-indicator { display:inline-flex; align-items:center; gap:8px; min-width:0; max-width:190px; padding:0 9px; color:var(--text,#252b38); }
+.voice-live-bars { display:inline-flex; align-items:center; justify-content:center; gap:2px; height:28px; min-width:54px; }
+.voice-live-bars i { display:block; width:2px; min-height:3px; max-height:25px; border-radius:5px; background:linear-gradient(180deg,#a855f7 0%,#3979ff 100%); transition:height 65ms linear,opacity 100ms ease; }
+.voice-live-label { font-size:11px; font-weight:600; white-space:nowrap; color:#4f78d8; }
+.dark .voice-live-label { color:#a9baff; }
+@media(max-width:480px) { .voice-live-indicator { gap:5px; padding:0 4px; } .voice-live-label { font-size:10px; } .voice-live-bars { min-width:40px; gap:1.5px; } .voice-live-bars i { width:2px; } }
+@media(prefers-reduced-motion:reduce) { .voice-live-bars i { transition:none; } }
