@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { deflateRawSync } from "node:zlib";
-import { extractTextFromZipArchive, isAllowedOrigin, shouldRejectEphemeralFileStorage } from "./index.js";
+import { decodeUploadedText, extractTextFromZipArchive, isAllowedOrigin, shouldRejectEphemeralFileStorage } from "./index.js";
 import { containsSensitiveSecret, isPastContextQuery, memoryKeywords } from "./memory-utils.js";
+
+describe("persistent text attachment decoding", () => {
+  it("decodes UTF-8 text from in-memory file bytes without a local filesystem dependency", () => {
+    expect(decodeUploadedText(Buffer.from("KOPLI AI — தமிழ்", "utf8"))).toBe("KOPLI AI — தமிழ்");
+  });
+});
 
 describe("Vercel file persistence safety", () => {
   it("rejects permanent file writes on Vercel when Supabase Storage is unavailable", () => {
