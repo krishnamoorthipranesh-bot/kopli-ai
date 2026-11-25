@@ -1713,7 +1713,17 @@ function App() {
                 {toolPreview ? <div className="explore-document-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{toolResult.content}</ReactMarkdown></div> : <textarea aria-label="Edit document content" className="explore-document-editor" value={toolResult.content} onChange={event => setToolResult(previous => previous ? { ...previous, content: event.target.value } : previous)} />}
                 <div className="explore-export-actions">{(["docx","pdf","txt"] as const).map(format => <button key={format} type="button" onClick={() => void exportDocument(format)}><Download size={15} /> Download {format.toUpperCase()}</button>)}<button type="button" onClick={() => void copyText(toolResult.content || "")}><Copy size={15} /> Copy</button></div>
               </>}
-              <div className="generated-image-toolbar"><span>{toolResult.fileName}</span><div>{toolType !== "docx" && toolResult.previewUrl && <a href={toolResult.previewUrl} download={toolResult.fileName} aria-label="Download generated file"><Download size={17} /> Download</a>}</div></div>
+              <div className="generated-image-toolbar"><span>{toolResult.fileName}</span><div>{toolType === "edit" && toolResult.previewUrl && <button type="button" className="explore-text-action" onClick={async () => {
+                try {
+                  const response = await fetch(toolResult.previewUrl!);
+                  const blob = await response.blob();
+                  const nextFile = new File([blob], toolResult.fileName || "KOPLI_AI_Edit.png", { type: toolResult.mimeType || "image/png" });
+                  setToolEditFile(nextFile);
+                  setToolEditPreview(toolResult.previewUrl!);
+                  setToolPrompt("");
+                  setToolResult(null);
+                } catch { setNotice("Could not prepare the edited image for another edit."); }
+              }}>Use as next edit</button>}{toolType !== "docx" && toolResult.previewUrl && <a href={toolResult.previewUrl} download={toolResult.fileName} aria-label="Download generated file"><Download size={17} /> Download</a>}</div></div>
             </div>}
             {toolType === "image" && imageHistory.length > 0 && <div className="explore-history"><strong>Recent images</strong><div>{imageHistory.map(item => <button key={item.fileName} type="button" title={item.prompt} onClick={() => { setToolResult({ fileName: item.fileName, previewUrl: item.previewUrl }); setToolPrompt(item.prompt); }}><img src={item.previewUrl} alt="" /><span>{item.prompt}</span></button>)}</div></div>}
           </div>
