@@ -233,6 +233,12 @@ function detectCreationIntent(prompt: string): { type: "image" | "document"; for
   return null;
 }
 
+function detectImageLookupIntent(prompt: string): boolean {
+  const text = prompt.trim();
+  if (!text || /\b(create|generate|make|build|design|draw|edit|illustrate)\b/i.test(text)) return false;
+  return /\b(photo|photograph|picture|image|portrait|wallpaper)\b|போட்டோ|படம்/i.test(text);
+}
+
 const modes: Array<{ id: Mode; label: string; detail: string; icon: IconComponent }> = [
   { id: "fast", label: "Fast", detail: "Quick response", icon: Zap },
   { id: "smart", label: "Smart", detail: "Balanced assistant", icon: Sparkles },
@@ -263,12 +269,41 @@ function MessageView({
   onSpeak: (text: string) => void;
 }) {
   const isUser = message.role === "user";
+  const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null);
+  useEffect(() => {
+    if (!expandedImage) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setExpandedImage(null); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [expandedImage]);
+  async function downloadImage() {
+    if (!expandedImage) return;
+    try {
+      const response = await fetch(expandedImage.src, { credentials: "include" });
+      if (!response.ok) throw new Error("Download failed");
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = (expandedImage.alt || "kopli-ai-image").replace(/[^a-z0-9_-]+/gi, "_") + ".png";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch {
+      window.open(expandedImage.src, "_blank", "noopener,noreferrer");
+    }
+  }
   return (
     <article className={`message ${message.role}${message.streaming ? " streaming" : ""}`}>
       <div className="message-user-content">
         <div className="message-content">
           {message.content
-            ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+            ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                img: ({ src, alt }) => src
+                  ? <button className="message-image-button" type="button" onClick={() => setExpandedImage({ src, alt: alt || "KOPLI AI image" })} aria-label="Open image full screen"><img src={src} alt={alt || "KOPLI AI image"} loading="lazy" /></button>
+                  : null
+              }}>{message.content}</ReactMarkdown>
             : <div className="thinking-state" role="status"><span>Thinking</span></div>}
           {message.generationType && message.streaming && <div className="generation-card" role="status" aria-live="polite">
             <div className="generation-card-heading"><span className="generation-card-icon">{message.generationType === "image" ? <ImageIcon size={17} /> : <FileText size={17} />}</span><span>{message.progressLabel || (message.generationType === "image" ? "Creating your image" : "Creating your document")}</span><strong>{message.progress ?? 8}%</strong></div>
@@ -281,7 +316,7 @@ function MessageView({
         </div>
           {!!message.attachments?.length && <div className="message-attachments" aria-label="Message attachments">
             {message.attachments.map((attachment, index) => attachment.previewUrl
-              ? <img key={`${attachment.fileName}-${index}`} src={attachment.previewUrl} alt={attachment.fileName} />
+              ? <button className="message-image-button" type="button" key={`${attachment.fileName}-${index}`} onClick={() => setExpandedImage({ src: attachment.previewUrl!, alt: attachment.fileName })} aria-label={`Open ${attachment.fileName} full screen`}><img src={attachment.previewUrl} alt={attachment.fileName} /></button>
               : <span key={`${attachment.fileName}-${index}`}><FileText size={16} />{attachment.fileName}</span>)}
           </div>}
         {!isUser && !message.streaming && message.content && <div className="message-actions" aria-label="Response actions">
@@ -291,6 +326,14 @@ function MessageView({
           <button type="button" aria-label="Mark not helpful" title="Not helpful" onClick={() => onFeedback(message, "not_helpful")}><ThumbsDown size={16} /></button>
         </div>}
       </div>
+      {expandedImage && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="Image preview" onClick={() => setExpandedImage(null)}>
+        <div className="image-lightbox-toolbar" onClick={event => event.stopPropagation()}>
+          <span>{expandedImage.alt}</span>
+          <button type="button" onClick={() => void downloadImage()} aria-label="Download image" title="Download"><Download size={19} /></button>
+          <button type="button" onClick={() => setExpandedImage(null)} aria-label="Close image" title="Close"><X size={19} /></button>
+        </div>
+        <img className="image-lightbox-image" src={expandedImage.src} alt={expandedImage.alt} onClick={event => event.stopPropagation()} />
+      </div>}
     </article>
   );
 }
@@ -630,6 +673,7 @@ function App() {
     if (!textarea) return;
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`;
+    textarea.scrollTop = textarea.scrollHeight;
   }, [prompt]);
 
   useEffect(() => () => {
@@ -832,6 +876,7 @@ function App() {
     let submittedText = text || "Please review the attached file.";
     const files = uploadedFiles;
     const creationIntent = files.length === 0 ? detectCreationIntent(text) : null;
+    const imageLookupIntent = files.length === 0 && !creationIntent && detectImageLookupIntent(text);
     stickToBottomRef.current = true;
     setShowScrollToLatest(false);
     setPrompt("");
@@ -874,8 +919,7 @@ function App() {
               150000
             );
             const previewUrl = `data:${result.mimeType};base64,${result.imageData}`;
-            assistantContent = `Your image is ready. [Open or download the full image](${result.url})`;
-            generatedAttachments = [{ fileName: result.fileName, mimeType: result.mimeType, previewUrl }];
+            assistantContent = `![Generated image](${result.url})\n\n[Download image](${result.url})`;
             setImageHistory(previous => [{ prompt: text, previewUrl, fileName: result.fileName }, ...previous].slice(0, 5));
           } else {
             const format = creationIntent.format || "docx";
@@ -903,6 +947,25 @@ function App() {
         } finally {
           window.clearInterval(progressTimer);
         }
+        return;
+      }
+      if (imageLookupIntent) {
+        const result = await request<{ query: string; images: Array<{ title: string; url: string; source: string }> }>(
+          "/api/images/search",
+          jsonRequest("POST", { prompt: text }),
+          30000
+        );
+        const images = Array.isArray(result.images) ? result.images.slice(0, 4) : [];
+        const assistantContent = images.length
+          ? `Relevant images for **${text}**:\n\n${images.map(image => `![${image.title.replace(/[\\[\\]()]/g, "")}](${image.url})\n\n[Image source](${image.source})`).join("\n\n")}`
+          : `I couldn't find a relevant image for **${text}**. Try the person's full name or a more specific subject. I won't substitute an unrelated stock photo.`;
+        await request(`/api/conversations/${encodeURIComponent(conversationId)}/artifacts`, jsonRequest("POST", {
+          userMessage: text, assistantMessage: assistantContent, title: text.slice(0, 60), mode
+        })).catch(error => { setNotice(`Image search completed, but chat history could not be saved: ${errorText(error)}`); });
+        setMessages(previous => previous.map(item => item.id === assistantId
+          ? { ...item, content: assistantContent, streaming: false }
+          : item));
+        if (user) void loadConversations();
         return;
       }
       for (const file of files) {
@@ -1434,8 +1497,8 @@ function App() {
       <main className="main" data-section={section} data-sidebar-open={sidebarOpen ? "true" : "false"}>
         <div className="chat-floating-controls" aria-label="Chat controls">
           <button className="icon-button floating-menu-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} title="Menu" onClick={() => { setSidebarOpen(value => !value); setChatActionsOpen(false); setComposerModeOpen(false); setAttachmentMenuOpen(false); setHeaderModeOpen(false); }}><Menu size={20} /></button>
-          {section === "Chat" && !sidebarOpen && <div className="chat-floating-actions">
-            <button className="floating-new-chat" type="button" onClick={() => { setChatLocked(false); newChat(); }}><Plus size={17} /><span>New chat</span></button>
+          {!sidebarOpen && <div className="chat-floating-actions">
+            {section === "Chat" && <button className="floating-new-chat" type="button" onClick={() => { setChatLocked(false); newChat(); }}><Plus size={17} /><span>New chat</span></button>}
             <div className="chat-actions-wrap">
               <button className="icon-button floating-more-button" type="button" aria-label="Chat options" title="Chat options" aria-expanded={chatActionsOpen} onClick={() => setChatActionsOpen(value => !value)}><MoreHorizontal size={20} /></button>
               {chatActionsOpen && <div className="chat-actions-menu" role="menu" aria-label="Chat options">
