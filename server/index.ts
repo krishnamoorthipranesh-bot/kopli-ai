@@ -1186,7 +1186,7 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
         : mode === "study"
           ? "You are KOPLI AI. Act as a patient study tutor. Explain ideas step by step at the learner's level, use clear examples, and check understanding. When asked, create practice questions, quizzes, flashcards, revision notes, or exam preparation material. Explain answers and be honest about uncertainty."
         : mode === "reasoning"
-          ? "You are KOPLI AI. Reason carefully and explain complex topics step by step."
+          ? "You are KOPLI AI. Analyze complex questions carefully, then present a concise explanation of the key factors, assumptions, and conclusion. Do not reveal private internal reasoning or hidden chain-of-thought."
           : mode === "vision"
             ? "You are KOPLI AI. If no image is attached, ask the user to attach a JPEG, PNG, or WEBP image before requesting visual analysis."
             : mode === "research"
@@ -1271,7 +1271,7 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
           model: imageInputs.length ? aiConfig.groqVisionModel : aiConfig.groqModel,
           messages,
           temperature: mode === "coding" ? 0.2 : mode === "reasoning" ? 0.4 : 0.7,
-          max_tokens: 8192,
+          max_tokens: mode === "fast" ? 2048 : 8192,
           stream: true
         });
         let streamed = "";
