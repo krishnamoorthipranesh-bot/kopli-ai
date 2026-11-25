@@ -7,8 +7,10 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "noEmit": true,
-    "types": ["node", "vite/client"]
+    "noEmit": true
   },
-  "include": ["src", "server"]
+  "include": [
+    "src",
+    "server"
+  ]
 }
