@@ -433,6 +433,12 @@ function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const voiceStreamRef = useRef<MediaStream | null>(null);
   const voiceChunksRef = useRef<Blob[]>([]);
+  const voiceAudioContextRef = useRef<AudioContext | null>(null);
+  const voiceAnalyserRef = useRef<AnalyserNode | null>(null);
+  const voiceMeterFrameRef = useRef<number | null>(null);
+  const voiceMeterSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const voiceMeterLastUpdateRef = useRef(0);
+  const [voiceLevel, setVoiceLevel] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const stickToBottomRef = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
@@ -1284,6 +1290,59 @@ function App() {
     if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }
 
+  function stopVoiceMeter() {
+    if (voiceMeterFrameRef.current !== null) cancelAnimationFrame(voiceMeterFrameRef.current);
+    voiceMeterFrameRef.current = null;
+    voiceMeterSourceRef.current?.disconnect();
+    voiceMeterSourceRef.current = null;
+    voiceAnalyserRef.current = null;
+    const context = voiceAudioContextRef.current;
+    voiceAudioContextRef.current = null;
+    if (context && context.state !== "closed") void context.close().catch(() => undefined);
+    setVoiceLevel(0);
+  }
+
+  async function startVoiceMeter(stream: MediaStream) {
+    stopVoiceMeter();
+    const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) return;
+    try {
+      const context = new AudioContextConstructor();
+      if (context.state === "suspended") await context.resume();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.72;
+      const source = context.createMediaStreamSource(stream);
+      source.connect(analyser);
+      voiceAudioContextRef.current = context;
+      voiceAnalyserRef.current = analyser;
+      voiceMeterSourceRef.current = source;
+      const samples = new Float32Array(analyser.fftSize);
+      let smoothed = 0;
+      let lastVoiceAt = 0;
+      const update = (now: number) => {
+        if (voiceAnalyserRef.current !== analyser || context.state === "closed") return;
+        analyser.getFloatTimeDomainData(samples);
+        let sum = 0;
+        for (let index = 0; index < samples.length; index += 1) sum += samples[index] * samples[index];
+        const rms = Math.sqrt(sum / samples.length);
+        const isSpeaking = rms > 0.022;
+        if (isSpeaking) lastVoiceAt = now;
+        const target = isSpeaking ? Math.min(1, Math.max(0, (rms - 0.018) * 12)) : (now - lastVoiceAt > 280 ? 0 : smoothed * 0.82);
+        smoothed += (target - smoothed) * (isSpeaking ? 0.38 : 0.2);
+        if (now - voiceMeterLastUpdateRef.current > 45) {
+          voiceMeterLastUpdateRef.current = now;
+          setVoiceLevel(smoothed < 0.015 ? 0 : smoothed);
+        }
+        voiceMeterFrameRef.current = requestAnimationFrame(update);
+      };
+      voiceMeterFrameRef.current = requestAnimationFrame(update);
+    } catch (error) {
+      console.warn("Live microphone waveform is unavailable.", error);
+      stopVoiceMeter();
+    }
+  }
+
   async function startRecorderVoiceFallback() {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setNotice("Voice recording is not supported in this browser. Try Chrome and allow microphone access.");
@@ -1292,6 +1351,7 @@ function App() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       voiceStreamRef.current = stream;
+      await startVoiceMeter(stream);
       voiceChunksRef.current = [];
       const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(type => MediaRecorder.isTypeSupported(type));
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
@@ -1300,12 +1360,14 @@ function App() {
       recorder.onerror = () => {
         setNotice("Microphone recording failed. Check microphone permission and try again.");
         setVoiceActive(false);
+        stopVoiceMeter();
         stream.getTracks().forEach(track => track.stop());
         voiceStreamRef.current = null;
         mediaRecorderRef.current = null;
       };
       recorder.onstop = async () => {
         setVoiceActive(false);
+        stopVoiceMeter();
         stream.getTracks().forEach(track => track.stop());
         voiceStreamRef.current = null;
         mediaRecorderRef.current = null;
@@ -1337,6 +1399,9 @@ function App() {
       recognitionRef.current.stop();
       recognitionRef.current = null;
       setVoiceActive(false);
+      stopVoiceMeter();
+      voiceStreamRef.current?.getTracks().forEach(track => track.stop());
+      voiceStreamRef.current = null;
       return;
     }
     if (mediaRecorderRef.current?.state === "recording") {
@@ -1370,11 +1435,32 @@ function App() {
       setNotice(`Voice input failed: ${event.error}. If your browser blocks speech recognition, use a supported browser or retry.`);
       setVoiceActive(false);
       recognitionRef.current = null;
+      stopVoiceMeter();
+      voiceStreamRef.current?.getTracks().forEach(track => track.stop());
+      voiceStreamRef.current = null;
     };
-    recognition.onend = () => { setVoiceActive(false); recognitionRef.current = null; };
+    recognition.onend = () => {
+      setVoiceActive(false);
+      recognitionRef.current = null;
+      stopVoiceMeter();
+      voiceStreamRef.current?.getTracks().forEach(track => track.stop());
+      voiceStreamRef.current = null;
+    };
     recognitionRef.current = recognition;
-    try { recognition.start(); setVoiceActive(true); }
-    catch (error) { recognitionRef.current = null; void startRecorderVoiceFallback(); }
+    try {
+      recognition.start();
+      setVoiceActive(true);
+      setNotice("Listening… speak naturally in your selected language.");
+      if (navigator.mediaDevices?.getUserMedia) {
+        void navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+          .then(stream => {
+            if (recognitionRef.current !== recognition) { stream.getTracks().forEach(track => track.stop()); return; }
+            voiceStreamRef.current = stream;
+            void startVoiceMeter(stream);
+          })
+          .catch(error => console.warn("Microphone level visualization permission unavailable.", error));
+      }
+    } catch (error) { recognitionRef.current = null; void startRecorderVoiceFallback(); }
   }
 
   async function runWebSearch(event: FormEvent) {
@@ -1586,7 +1672,7 @@ function App() {
                         return <button key={option.id} type="button" className={mode === option.id ? "selected" : ""} onClick={() => { setMode(option.id); setComposerModeOpen(false); }}><Icon size={16} /><div><strong>{option.label}</strong><span>{option.detail}</span></div></button>;
                       })}</div>}
                     </div>
-                    <button className={`composer-button${voiceActive ? " selected" : ""}`} type="button" aria-label={voiceActive ? "Stop voice input" : "Start voice input"} title="Voice input" onClick={toggleVoice}><Mic size={18} /></button>
+                    <button className={`composer-button${voiceActive ? " selected" : ""}`} type="button" aria-label={voiceActive ? "Stop voice input" : "Start voice input"} title="Voice input" onClick={toggleVoice}><Mic size={18} /></button>{voiceActive && <div className="voice-live-indicator" role="status" aria-live="polite"><span className="voice-live-bars" aria-hidden="true">{Array.from({ length: 17 }, (_, index) => <i key={index} style={{ height: `${4 + voiceLevel * (8 + (index % 5) * 4)}px`, opacity: voiceLevel > 0.025 ? 0.55 + voiceLevel * 0.45 : 0.35 }} />)}</span><span className="voice-live-label">Listening...</span></div>}
                     {streaming
                       ? <button className="send-button" type="button" aria-label="Stop response" onClick={() => abortRef.current?.abort()}><X size={18} /></button>
                       : <button className="send-button" type="submit" disabled={chatLocked || uploadBusy || (!prompt.trim() && !uploadedFiles.length)} aria-label="Send message"><Send size={18} /></button>}
