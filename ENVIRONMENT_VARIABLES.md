@@ -19,9 +19,9 @@ This document lists all environment variables utilized by the **KOPLI AI** backe
 | `SUPABASE_SERVICE_ROLE_KEY` | Required for persistent file storage | Server-only secret | Server-side Storage access. Never expose this key in frontend code, browser storage, public logs or Git. |
 | `SUPABASE_STORAGE_BUCKET` | Optional | `kopli-user-files` | Existing private bucket for user uploads and generated files. |
 | `KOPLI_OWNER_EMAIL` | Recommended | `owner@example.com` | Email address designated as the administrator and project owner. Accounts matching this email receive the `owner` role automatically upon registration or login. |
-| `KOPLI_ADMIN_SECRET` | Recommended | 32+ char random hex string | Random secret key used for administrative verification and fallback session signing. Generate a strong random secret and configure it in Vercel. |
-| `SESSION_SECRET` | Recommended | 32+ char random hex string | Cryptographic secret key used to sign and verify HMAC-SHA256 session cookies (`kopli_session`). Automatically generated in Vercel via `render.yaml`. |
-| `PORT` | Optional | `8787` (local) | Local Express server port. Vercel manages production function ports. |
+| `KOPLI_ADMIN_SECRET` | Recommended | 32+ char random hex string | Random secret key used for administrative verification and fallback session signing. Automatically generated in Render via `render.yaml`. |
+| `SESSION_SECRET` | Recommended | 32+ char random hex string | Cryptographic secret key used to sign and verify HMAC-SHA256 session cookies (`kopli_session`). Automatically generated in Render via `render.yaml`. |
+| `PORT` | Optional | `8787` (local), `10000` (Render) | HTTP port on which the Express server listens. Render automatically injects this value. |
 | `RENDER_EXTERNAL_URL` | Optional | `https://kopli-ai.onrender.com` | Automatically supplied by Render to denote the public HTTPS URL for CORS and origin validation. |
 | `ALLOWED_ORIGINS` | Optional | `https://customdomain.com` | Comma-separated list of additional allowed cross-origin domains (e.g. for custom domain mappings). |
 | `NODE_ENV` | Optional | `production` | Node environment identifier. Enables production cookie security flags (`Secure`, `SameSite=Lax`). |
