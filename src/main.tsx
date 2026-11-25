@@ -1607,7 +1607,7 @@ function App() {
                 {section === "Chat" && <>
                     <section className="chat-shell" aria-label="Chat">
             {messages.length === 0 ? <div className="welcome">
-              <h1>Hi {user?.name?.trim().split(/\s+/)[0] || (user?.email.split("@")[0].split(/[._-]/)[0]) || "there"}, welcome back</h1>
+              <h1>{user ? `Hi ${user.name?.trim().split(/\s+/)[0] || user.email.split("@")[0].split(/[._-]/)[0]}, welcome back` : "What can I help you with?"}</h1>
               <p>What would you like to work on today?</p>
               <div className="suggestions">
                 {["Explain a topic simply", "Help me plan a project", "Write or improve code", "Research a topic"].map((item, index) => <button key={item} onClick={() => { setPrompt(item); textareaRef.current?.focus(); }}><span>{item}</span>{index === 2 ? <Code2 size={17} /> : index === 3 ? <Globe2 size={17} /> : <Sparkles size={17} />}</button>)}
