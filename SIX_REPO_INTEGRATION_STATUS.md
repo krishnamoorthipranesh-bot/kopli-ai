@@ -20,7 +20,7 @@ This document tracks the feature sets being adapted into the existing KOPLI AI a
 - Validate file signatures, restrict the Cloudflare model allowlist, prevent redirect-based URL fetching, and cap downloaded output at 16 MB.
 - Store generated edits using the existing private Supabase-backed storage flow.
 - Add an AI Image Editor tool to Explore with upload, prompt, before/after comparison, iterative edits, preview, and download.
-- Expand image style presets and add negative-prompt guidance for FLUX.1 schnell.
+- Expand image style presets and add negative-prompt guidance for FLUX.1 schnell. The current Workers AI schnell API accepts prompt/steps rather than a dedicated negative_prompt field, so avoid terms are appended as natural-language prompt guidance.
 - Add owner-only admin statistics for users, conversations, files, and stored-file bytes.
 - Document Cloudflare image-edit model settings and billing.
 
