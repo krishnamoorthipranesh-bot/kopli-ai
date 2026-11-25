@@ -1657,8 +1657,6 @@ function App() {
                         <button type="button" role="menuitem" onClick={() => { setAttachmentMenuOpen(false); setCameraError(""); setCapturedPhoto(null); setCameraOpen(true); }}><Camera size={18} /><span><strong>Camera</strong><small>Capture a photo</small></span></button>
                         <button type="button" role="menuitem" onClick={() => { setAttachmentMenuOpen(false); photoInputRef.current?.click(); }}><Images size={18} /><span><strong>Photos</strong><small>Choose images</small></span></button>
                         <button type="button" role="menuitem" onClick={() => { setAttachmentMenuOpen(false); fileInputRef.current?.click(); }}><Files size={18} /><span><strong>Files</strong><small>Documents and archives</small></span></button>
-                        <div className="attachment-menu-unavailable" aria-disabled="true"><Code2 size={18} /><span><strong>Plugins</strong><small>No plugin integrations are configured</small></span></div>
-                        <button type="button" role="menuitem" aria-pressed={mode === "reasoning"} onClick={() => { setMode("reasoning"); setAttachmentMenuOpen(false); }}><Brain size={18} /><span><strong>Think Harder</strong><small>Use deeper reasoning</small></span></button>
                       </div>}
                     </div>
                     <button className={`composer-button${mode === "research" ? " search-on" : ""}`} type="button" aria-label="Toggle research mode" title="Research mode" onClick={() => setMode(value => value === "research" ? "smart" : "research")}><Globe2 size={18} /></button>
