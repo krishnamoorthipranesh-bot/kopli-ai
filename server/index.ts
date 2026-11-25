@@ -1910,7 +1910,7 @@ async function generateFile(req: express.Request, res: express.Response) {
       const file = path.join(generated, `${id}.xlsx`);
       const bytes = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
       fs.writeFileSync(file, bytes);
-      if (prisma) await prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", size: bytes.length, path: file, kind: "document" } }).catch(error => { console.error("Could not add the generated spreadsheet to the library.", error); throw error; });
+      await saveUserFile({ id, userId: user.id, name: `${id}.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes, kind: "document", localPath: file });
       return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Workbook.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", url: `/api/files/${id}.xlsx`, format: "XLSX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
@@ -1932,8 +1932,8 @@ async function generateFile(req: express.Request, res: express.Response) {
         pdf.on("end", resolve);
         pdf.on("error", reject);
       });
-      const bytes = fileBytes;
-      if (prisma) await prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.pdf`, mimeType: "application/pdf", size: bytes.length, path: file, kind: "document" } }).catch(error => { console.error("Could not add the generated PDF to the library.", error); throw error; });
+      const bytes = fs.readFileSync(file);
+      await saveUserFile({ id, userId: user.id, name: `${id}.pdf`, mimeType: "application/pdf", bytes, kind: "document", localPath: file });
       return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Report.pdf`, mimeType: "application/pdf", url: `/api/files/${id}.pdf`, format: "PDF", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
@@ -1973,8 +1973,8 @@ async function generateFile(req: express.Request, res: express.Response) {
       file = path.join(generated, `${id}.pptx`);
       await (pptx as any).writeFile({ fileName: file });
       if (!fs.existsSync(file) || fs.statSync(file).size < 1000) throw new Error("PowerPoint file generation produced an invalid file.");
-      const bytes = fileBytes;
-      if (prisma) await prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", size: bytes.length, path: file, kind: "document" } }).catch(error => { console.error("Could not add the generated presentation to the library.", error); throw error; });
+      const bytes = fs.readFileSync(file);
+      await saveUserFile({ id, userId: user.id, name: `${id}.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", bytes, kind: "document", localPath: file });
       return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Presentation.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", url: `/api/files/${id}.pptx`, format: "PPTX", slideCount: slides.length, ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
@@ -1998,8 +1998,8 @@ async function generateFile(req: express.Request, res: express.Response) {
     file = path.join(generated, `${id}.docx`);
     await Packer.toBuffer(doc).then(buffer => fs.writeFileSync(file, buffer));
     if (!fs.existsSync(file) || fs.statSync(file).size < 1000) throw new Error("Word file generation produced an invalid file.");
-    const bytes = fileBytes;
-    if (prisma) await prisma.storedFile.create({ data: { id, userId: user.id, name: `${id}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", size: bytes.length, path: file, kind: "document" } }).catch(error => { console.error("Could not add the generated document to the library.", error); throw error; });
+    const bytes = fs.readFileSync(file);
+    await saveUserFile({ id, userId: user.id, name: `${id}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes, kind: "document", localPath: file });
     return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Document.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", url: `/api/files/${id}.docx`, format: "DOCX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
   } catch (error: any) {
     res.status(error?.statusCode || 500).json({ error: error?.message || "Document generation failed." });
@@ -2051,34 +2051,23 @@ app.post("/api/pdf/generate", documentRateLimit, generateFile);
 app.get("/api/files/:fileName", async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to access files." });
-  if (prisma) { const record = await prisma.storedFile.findFirst({ where: { name: path.basename(req.params.fileName), userId: user.id } }); if (!record) return res.status(404).json({ error: "File not found." }); }
   const fileName = path.basename(req.params.fileName);
-  const searchDirs = [generated, uploads];
-  for (const dir of searchDirs) {
-    const file = path.join(dir, fileName);
-    if (fs.existsSync(file)) {
-      const bytes = fileBytes;
-      const ext = path.extname(fileName).toLowerCase();
-      const mimeTypes: Record<string, string> = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-        ".pdf": "application/pdf",
-        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".txt": "text/plain",
-        ".csv": "text/csv",
-        ".json": "application/json"
-      };
-      res.setHeader("Content-Type", mimeTypes[ext] || "application/octet-stream");
-      res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
-      return res.send(bytes);
-    }
-  }
-  res.status(404).json({ error: "File not found." });
+  const record = prisma ? await prisma.storedFile.findFirst({ where: { name: fileName, userId: user.id } }) : null;
+  if (prisma && !record) return res.status(404).json({ error: "File not found." });
+  const localPath = [generated, uploads].map(dir => path.join(dir, fileName)).find(candidate => fs.existsSync(candidate));
+  const bytes = await readUserFile(record, localPath);
+  if (!bytes) return res.status(404).json({ error: "File not found." });
+  const ext = path.extname(fileName).toLowerCase();
+  const mimeTypes: Record<string, string> = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif",
+    ".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".txt": "text/plain", ".csv": "text/csv", ".json": "application/json"
+  };
+  res.setHeader("Content-Type", record?.mimeType || mimeTypes[ext] || "application/octet-stream");
+  res.setHeader("Content-Disposition", `inline; filename="${fileName}"`);
+  res.setHeader("Cache-Control", "private, no-store");
+  return res.send(bytes);
 });
 
 app.get("/api/library", async (req, res) => {
@@ -2087,9 +2076,10 @@ app.get("/api/library", async (req, res) => {
   if (!prisma) return res.json({ files: [] });
   const records = await prisma.storedFile.findMany({ where: { userId: user.id }, orderBy: { createdAt: "desc" } });
   const files = records.flatMap(record => {
-    if (!fs.existsSync(record.path)) return [];
-    const stat = fs.statSync(record.path);
-    return [{ fileName: record.name, size: stat.size, type: record.mimeType.split("/")[1]?.toUpperCase() || record.kind.toUpperCase(), url: `/api/files/${encodeURIComponent(record.name)}`, updatedAt: stat.mtime.toISOString() }]
+    if (!record.path.startsWith("supabase://") && !fs.existsSync(record.path)) return [];
+    const size = record.size;
+    const updatedAt = record.createdAt.toISOString();
+    return [{ fileName: record.name, size, type: record.mimeType.split("/")[1]?.toUpperCase() || record.kind.toUpperCase(), url: `/api/files/${encodeURIComponent(record.name)}`, updatedAt }];
   });
   res.json({ files });
 });
@@ -2097,35 +2087,41 @@ app.get("/api/library", async (req, res) => {
 app.patch("/api/library/:fileName", async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to manage files." });
-  if (prisma) { const record = await prisma.storedFile.findFirst({ where: { name: path.basename(req.params.fileName), userId: user.id } }); if (!record) return res.status(404).json({ error: "File not found." }); }
+  if (!prisma) return res.status(503).json({ error: "File metadata database is unavailable." });
   const fileName = path.basename(req.params.fileName);
-  const nextName = path.basename(String(req.body?.name || "").trim());
+  const record = await prisma.storedFile.findFirst({ where: { name: fileName, userId: user.id } });
+  if (!record) return res.status(404).json({ error: "File not found." });
+  const requestedName = String(req.body?.name || "").trim().slice(0, 180);
+  const extension = path.extname(fileName);
+  const baseName = path.basename(requestedName, path.extname(requestedName)).replace(/[^\\w.\\- ()]/g, "_").trim();
+  const nextName = baseName ? `${baseName}${extension}` : "";
   if (!nextName) return res.status(400).json({ error: "File name cannot be empty." });
-  for (const dir of [generated, uploads]) {
-    const file = path.join(dir, fileName);
-    if (fs.existsSync(file)) {
-      const target = path.join(dir, nextName);
-      if (fs.existsSync(target)) return res.status(409).json({ error: "A file with that name already exists." });
-      fs.renameSync(file, target);
-      return res.json({ fileName: nextName, url: `/api/files/${encodeURIComponent(nextName)}` });
-    }
+  const duplicate = await prisma.storedFile.findFirst({ where: { userId: user.id, name: nextName, id: { not: record.id } } });
+  if (duplicate) return res.status(409).json({ error: "A file with that name already exists." });
+  if (!record.path.startsWith("supabase://")) {
+    const target = path.join(path.dirname(record.path), nextName);
+    if (fs.existsSync(record.path)) await fs.promises.rename(record.path, target);
+    await prisma.storedFile.update({ where: { id: record.id }, data: { name: nextName, path: target } });
+  } else {
+    await prisma.storedFile.update({ where: { id: record.id }, data: { name: nextName } });
   }
-  res.status(404).json({ error: "File not found." });
+  return res.json({ fileName: nextName, url: `/api/files/${encodeURIComponent(nextName)}` });
 });
 
 app.delete("/api/library/:fileName", async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to manage files." });
-  if (prisma) { const record = await prisma.storedFile.findFirst({ where: { name: path.basename(req.params.fileName), userId: user.id } }); if (!record) return res.status(404).json({ error: "File not found." }); }
+  if (!prisma) return res.status(503).json({ error: "File metadata database is unavailable." });
   const fileName = path.basename(req.params.fileName);
-  for (const dir of [generated, uploads]) {
-    const file = path.join(dir, fileName);
-    if (fs.existsSync(file)) {
-      fs.unlinkSync(file);
-      return res.status(204).end();
-    }
+  const record = await prisma.storedFile.findFirst({ where: { name: fileName, userId: user.id } });
+  if (!record) return res.status(404).json({ error: "File not found." });
+  if (record.path.startsWith("supabase://")) {
+    await deletePersistentObject(record.path.slice("supabase://".length));
+  } else {
+    await fs.promises.unlink(record.path).catch(() => undefined);
   }
-  res.status(404).json({ error: "File not found." });
+  await prisma.storedFile.delete({ where: { id: record.id } });
+  return res.status(204).end();
 });
 
 app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
