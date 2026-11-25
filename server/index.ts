@@ -1532,17 +1532,23 @@ app.post("/api/images/search", imageSearchRateLimit, async (req, res) => {
     if (!response.ok) throw new Error(`Wikimedia Commons returned HTTP ${response.status}.`);
     const payload: any = await response.json();
     const pages = Object.values(payload?.query?.pages || {}) as any[];
+    const queryTokens = query.toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter(token => token.length > 2);
     const images = pages.flatMap(page => {
       const info = page?.imageinfo?.[0];
       const imageUrl = info?.thumburl || info?.url;
       if (!imageUrl || !/^https:\/\//i.test(imageUrl) || !String(info?.mime || "").startsWith("image/")) return [];
-      const title = String(page.title || "Image").replace(/^File:/i, "");
+      const rawTitle = String(page.title || "Image").replace(/^File:/i, "");
+      const titleText = rawTitle.toLocaleLowerCase().replace(/[_-]+/g, " ");
+      const matchedTokens = queryTokens.filter(token => titleText.includes(token));
+      const relevance = queryTokens.length ? matchedTokens.length / queryTokens.length : 0;
+      if (queryTokens.length && (matchedTokens.length === 0 || (queryTokens.length > 1 && relevance < 0.34))) return [];
       return [{
-        title,
+        title: rawTitle,
         url: imageUrl,
-        source: `https://commons.wikimedia.org/wiki/${encodeURIComponent(String(page.title || "").replace(/ /g, "_"))}`
+        source: \`https://commons.wikimedia.org/wiki/\${encodeURIComponent(String(page.title || "").replace(/ /g, "_"))}\`,
+        relevance
       }];
-    }).slice(0, 4);
+    }).sort((a, b) => b.relevance - a.relevance).slice(0, 4).map(({ relevance: _relevance, ...image }) => image);
     return res.json({ query, images });
   } catch (error: any) {
     console.error("Relevant image search failed.", error);
