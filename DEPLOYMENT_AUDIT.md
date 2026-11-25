@@ -17,6 +17,9 @@
 - The inspected Vercel runtime log window contained no error/fatal entries.
 - These observations do not replace a real end-to-end production smoke test.
 
+## Production smoke-test finding
+A live request to the currently deployed production `/health` and `/api/health` returned HTTP 200 with `ready:true` while the response also reported `fileStorageConfigured:false` and `fileStorage:"temporary"`. The audit branch corrects this by keeping `/health` as liveness-only and making `/api/health` a strict readiness check. This fix is not yet deployed.
+
 ## Important readiness blocker
 The Vercel environment-variable inventory did not include `SUPABASE_SERVICE_ROLE_KEY`. Supabase Storage persistence therefore remains unverified and the health endpoint should report degraded/unready until configured. The audit branch makes upload and file-generation routes fail closed in this condition.
 
