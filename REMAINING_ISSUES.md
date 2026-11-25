@@ -15,14 +15,14 @@ Last reviewed against repository branch `master`, Vercel project configuration, 
 
 ## Additional findings / verification gaps
 - **Settings and workspace feature coverage is partial.** The current settings screen exposes Appearance, Personalization, Data & memory, Account, and About; dedicated General, AI models, Voice, and Security sections are not implemented as separate settings pages. The visible Projects shortcut currently routes to Data & memory, and the Prisma `Project` model has no user ownership relation or corresponding project API route. Do not treat Projects as a completed feature until real user-scoped persistence and UI are implemented.
-- **Frontend visual redesign remains incomplete.** The app imports `styles.css`, `theme.css`, and `chat-theme.css`; the two large stylesheets contain overlapping selectors and multiple breakpoint overrides. This makes the final cascade harder to reason about. A true visual redesign and device/browser screenshot QA have not been completed; avoid claiming the UI is fully redesigned based on the targeted composer fixes already merged in earlier work.
+- **Physical visual QA remains outstanding.** The chat UI now has a targeted responsive cleanup: mobile composer input and action bar use separate rows, menus are height-bounded, safe-area/keyboard spacing is respected, and duplicate Reasoning/placeholder items were removed from the attachment menu. Full Android/browser screenshot QA and a complete redesign of every settings/workspace screen are not yet verified.
 - **Production readiness endpoint is misleading in the current deployed commit.** A live smoke test returned HTTP 200 and `ready:true` while `fileStorageConfigured:false` and `fileStorage:"temporary"`. The audit branch separates liveness (`/health`) from readiness (`/api/health`) so readiness returns 503 until durable storage is configured. This correction is in the open PR and is not deployed yet.
-- **Dependency audit reports seven high-severity findings.** The current CI audit inventory found advisories in `@prisma/config` / `prisma` (via `deepmerge-ts` and `effect`), `pptxgenjs` / `image-size`, and `xlsx`. The suggested Prisma and PptxGenJS remediations cross major-version boundaries; `xlsx` has no npm fix available. No forced upgrade was applied because compatibility with database migrations and document generation must be verified first. CI's dependency audit step is informational/non-blocking, not a clean-vulnerability pass.
-- `package.json` and `package-lock.json` are inconsistent (including `pdf-parse` and TypeScript declarations); CI currently uses `npm install` rather than deterministic `npm ci`. Regenerate and review the lockfile with a network-enabled build environment before switching to `npm ci`.
+- **Dependency audit remediation completed.** The regenerated lockfile now passes `npm ci` and `npm audit --audit-level=high` with 0 vulnerabilities. CI now uses a strict audit gate.
+- package.json and package-lock.json are aligned; CI uses deterministic `npm ci --include=dev`.
 - Several dependencies are declared as `latest`; pin reviewed versions to reduce supply-chain drift.
 - Resend sender verification and real password-recovery delivery have not been re-verified. Signup does not require email verification.
 - Android physical-device visual QA and a full desktop/mobile browser E2E suite have not been completed in this audit.
-- RLS is enabled on the existing public tables; no policies were present in the previous advisor review. The application uses server-side Prisma access. Do not add broad policies without reviewing the actual Data API exposure and access model.
+- RLS remains enabled with no client policies. Existing public-schema table/sequence/function grants were revoked from anon/authenticated, and postgres default privileges were tightened; server-side Prisma access remains unchanged.
 - No complete external penetration test or production load test has been performed.
 
 
@@ -35,5 +35,5 @@ Last reviewed against repository branch `master`, Vercel project configuration, 
 - These are targeted improvements, not a completed full visual redesign. The latest-head Preview is not yet available for visual verification.
 
 ## Work in progress
-- Branch `audit/production-cleanup-hardening` removes stale Render production references, removes the Render keep-awake workflow, removes unnecessary `GH_PAT` use from CI, and makes file-generation/upload endpoints fail closed when persistent storage is not configured.
-- These branch changes are not production-complete until CI, Preview, and Production verification pass.
+- Branch `audit/production-cleanup-hardening` removes stale Render production references, removes the Render keep-awake workflow, makes Vercel file-generation/upload endpoints fail closed without persistent storage, improves mobile composer layout, removes duplicate menu items, and hardens dependency audit/CI.
+- CI and the strict dependency audit pass. Production promotion remains blocked by the missing SUPABASE_SERVICE_ROLE_KEY and Vercel's daily deployment quota; exact-head Preview and device QA are still required.
