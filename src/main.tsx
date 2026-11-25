@@ -1706,7 +1706,7 @@ function App() {
             </form>
             {toolBusy && <p className="explore-status" role="status">KOPLI AI is {toolType === "edit" ? "editing your image" : `creating your ${toolType === "image" ? "image" : toolType === "docx" ? "document draft" : toolType.toUpperCase()}`}…</p>}
             {toolResult && <div className="generated-image-card explore-result">
-              {(toolType === "image" || toolType === "edit") && toolResult.previewUrl && <img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || (toolType === "edit" ? "AI edited image" : "AI generated image")} />}
+              {toolType === "edit" && toolResult.previewUrl ? <div className="image-edit-comparison"><figure><figcaption>Original</figcaption><img className="generated-image-preview" src={toolEditPreview} alt="Original uploaded image" /></figure><figure><figcaption>AI edited</figcaption><img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || "AI edited image"} /></figure></div> : toolType === "image" && toolResult.previewUrl ? <img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || "AI generated image"} /> : null}
               {toolType === "pdf" && toolResult.previewUrl && <iframe className="explore-pdf-preview" src={toolResult.previewUrl} title={toolResult.fileName} />}
               {toolType === "docx" && toolResult.content !== undefined && <>
                 <div className="explore-result-tabs"><button type="button" className={!toolPreview ? "active" : ""} onClick={() => setToolPreview(false)}>Edit</button><button type="button" className={toolPreview ? "active" : ""} onClick={() => setToolPreview(true)}>Preview</button></div>
