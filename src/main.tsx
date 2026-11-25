@@ -300,7 +300,7 @@ function App() {
   const [authReady, setAuthReady] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [registering, setRegistering] = useState(false);
-  const [authStage, setAuthStage] = useState<"account" | "forgot" | "reset" | "verify">("account");
+  const [authStage, setAuthStage] = useState<"account" | "forgot" | "reset">("account");
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
@@ -454,20 +454,17 @@ function App() {
   }, [checkServerConnection]);
 
   useEffect(() => {
+    if (!authReady || user) return;
     const params = new URLSearchParams(window.location.search);
-    const verificationToken = params.get("verifyToken");
-    if (verificationToken) {
-      setAuthStage("verify");
-      setRegistering(false);
-      setAuthOpen(true);
-      setAuthBusy(true);
-      window.history.replaceState({}, "", `${window.location.pathname}${window.location.hash}`);
-      void request<{ message: string }>("/api/auth/verify-email", jsonRequest("POST", { token: verificationToken }))
-        .then(result => setAuthMessage(result.message))
-        .catch(error => setAuthError(errorText(error)))
-        .finally(() => setAuthBusy(false));
-      return;
-    }
+    if (params.has("resetToken")) return;
+    try {
+      if (sessionStorage.getItem("kopli.auth-choice") === "guest") return;
+    } catch {}
+    setAuthOpen(true);
+  }, [authReady, user]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
     const token = params.get("resetToken");
     if (token) {
       setResetToken(token);
@@ -1020,6 +1017,7 @@ function App() {
       }));
       if (!result.user) throw new Error("The account service returned an incomplete sign-in response.");
       setUser(result.user);
+      try { sessionStorage.removeItem("kopli.auth-choice"); } catch {}
       setActiveId(null);
       setMessages([]);
       setAuthOpen(false);
@@ -1031,17 +1029,6 @@ function App() {
     } catch (error) {
       setAuthError(errorText(error));
     }
-    finally { setAuthBusy(false); }
-  }
-
-  async function resendVerificationEmail() {
-    setAuthBusy(true);
-    setAuthError("");
-    setAuthMessage("");
-    try {
-      const result = await request<{ message: string }>("/api/auth/resend-verification", jsonRequest("POST", { email: authEmail }));
-      setAuthMessage(result.message);
-    } catch (error) { setAuthError(errorText(error)); }
     finally { setAuthBusy(false); }
   }
 
@@ -1058,6 +1045,7 @@ function App() {
 
   function closeAuthDialog() {
     setAuthOpen(false);
+    try { sessionStorage.setItem("kopli.auth-choice", "guest"); } catch {}
     setAuthPassword("");
     setAuthPasswordConfirmation("");
     setShowAuthPassword(false);
@@ -1432,13 +1420,7 @@ function App() {
           {currentHistory.length ? currentHistory.map(conversation => (
             <div className={`history-row${activeId === conversation.id ? " active" : ""}`} key={conversation.id}>
               <button className="history-open" title={conversation.title} onClick={() => selectConversation(conversation)}><span>{conversation.pinned ? "📌 " : ""}{conversation.title}</span></button>
-              <details className="history-menu"><summary aria-label={`Actions for ${conversation.title}`}><MoreHorizontal size={17} /></summary>
-                <div className="history-actions">
-                  <button onClick={() => void updateConversationFlag(conversation.id, "pinned")}>{conversation.pinned ? "Unpin" : "Pin"}</button>
-                  {user && <button onClick={() => void updateConversationFlag(conversation.id, "archived")}>Archive</button>}
-                  <button onClick={() => void deleteConversation(conversation.id)}>Delete</button>
-                </div>
-              </details>
+
             </div>
           )) : <div className="empty-history">{authReady ? "Your conversations will appear here." : "Loading history…"}</div>}
         </div>
@@ -1646,8 +1628,8 @@ function App() {
         <section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
           <button className="dialog-close" aria-label="Close sign in" onClick={closeAuthDialog}><X size={19} /></button>
           <div className="auth-brand">KOPLI <span>AI</span></div>
-          <h1 id="auth-title">{authStage === "forgot" ? "Reset your password" : authStage === "reset" ? "Create new password" : authStage === "verify" ? "Verify your email" : registering ? "Create your account" : "Welcome back"}</h1>
-          <p>{authStage === "forgot" ? "Enter your account email. The secure link opens the new-password form directly." : authStage === "reset" ? "Choose a new password for your account." : authStage === "verify" ? "Confirm your email address to finish setting up your account." : registering ? "Create an account to sync conversations and files." : "Sign in to your KOPLI AI account."}</p>
+          <h1 id="auth-title">{authStage === "forgot" ? "Reset your password" : authStage === "reset" ? "Create new password" : registering ? "Create your account" : "Welcome back"}</h1>
+          <p>{authStage === "forgot" ? "Enter your account email. The secure recovery link opens the new-password form directly." : authStage === "reset" ? "Choose a new password for your account." : registering ? "Create an account to sync conversations and files. No email verification is required." : "Sign in to your KOPLI AI account, or continue as a guest."}</p>
           {authStage === "account" && <form onSubmit={event => void submitAuth(event)}>
             {registering && <label>Name<input autoComplete="name" value={authName} onChange={event => setAuthName(event.target.value)} required maxLength={100} /></label>}
             <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
@@ -1661,16 +1643,9 @@ function App() {
             <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
             {authError && <p className="auth-error" role="alert">{authError}</p>}
             {authMessage && <p className="auth-success" role="status">{authMessage}</p>}
-            <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Sending…" : "Send password reset link"}</button>
+            <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Sending…" : "Send secure password reset link"}</button>
             <button className="auth-mode-toggle" type="button" onClick={() => { setAuthStage("account"); setAuthError(""); setAuthMessage(""); }}>Back to sign in</button>
           </form>}
-          {authStage === "verify" && <div className="auth-verification">
-            <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
-            {authError && <p className="auth-error" role="alert">{authError}</p>}
-            {authMessage && <p className="auth-success" role="status">{authMessage}</p>}
-            <button className="auth-submit" type="button" disabled={authBusy || !authEmail.trim()} onClick={() => void resendVerificationEmail()}>{authBusy ? "Please wait…" : "Send verification email"}</button>
-            <button className="auth-mode-toggle" type="button" onClick={() => { setAuthStage("account"); setRegistering(false); setAuthError(""); setAuthMessage(""); setAuthPassword(""); }}>Back to sign in</button>
-          </div>}
           {authStage === "reset" && <form onSubmit={event => void submitPasswordReset(event)}>
             {!resetToken && <p className="auth-error" role="alert">This reset link is missing or invalid. Request a new recovery email.</p>}
             <label>New password<span className="auth-password-field"><input type={showAuthPassword ? "text" : "password"} autoComplete="new-password" value={authPassword} onChange={event => setAuthPassword(event.target.value)} required minLength={12} /><button type="button" aria-label={showAuthPassword ? "Hide password" : "Show password"} aria-pressed={showAuthPassword} onClick={() => setShowAuthPassword(value => !value)}>{showAuthPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>
@@ -1683,6 +1658,7 @@ function App() {
           {authStage === "account" && <div className="auth-links">
             {!registering && <button className="auth-mode-toggle" type="button" onClick={() => { setAuthStage("forgot"); setAuthError(""); setAuthMessage(""); setAuthPassword(""); setAuthPasswordConfirmation(""); setShowAuthPassword(false); }}>Forgot password?</button>}
             <button className="auth-mode-toggle" type="button" onClick={() => { setRegistering(value => !value); setAuthError(""); setAuthMessage(""); setAuthPassword(""); setAuthPasswordConfirmation(""); }}>{registering ? "Already have an account? Sign in" : "New to KOPLI AI? Create an account"}</button>
+            {!registering && <button className="auth-mode-toggle guest-continue" type="button" onClick={closeAuthDialog}>Continue without login</button>}
           </div>}
         </section>
       </div>}
