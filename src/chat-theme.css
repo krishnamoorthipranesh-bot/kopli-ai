@@ -986,6 +986,47 @@
 .main[data-section]:not([data-section="Chat"]) .chat-floating-actions { display: flex !important; }
 
 
+/* Stable mobile composer layout: text occupies its own row and controls never cover it. */
+.composer {
+  position: relative !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 8px !important;
+  min-height: 0 !important;
+  padding: 12px !important;
+}
+.composer .composer-input {
+  position: relative !important;
+  width: 100% !important;
+  min-height: 42px !important;
+  max-height: 160px !important;
+  height: auto;
+  padding: 8px 10px !important;
+  overflow-y: auto !important;
+}
+.composer .composer-toolbar {
+  position: relative !important;
+  inset: auto !important;
+  display: flex !important;
+  width: 100% !important;
+  min-height: 42px !important;
+  justify-content: space-between !important;
+  flex-wrap: nowrap !important;
+  gap: 6px !important;
+}
+.composer-toolbar-left,.composer-toolbar-right { min-width: 0; flex-wrap: nowrap; }
+.composer-mode { max-width: 124px; white-space: nowrap; }
+.composer .composer-button,.composer .send-button { flex: 0 0 38px !important; }
+@media (max-width: 420px) {
+  .composer { padding: 9px !important; gap: 6px !important; }
+  .composer-toolbar-left,.composer-toolbar-right { gap: 2px !important; }
+  .composer-mode { max-width: 104px; min-width: 0; padding-inline: 5px; font-size: 11px; }
+  .composer .composer-button { width: 34px !important; min-width: 34px !important; flex-basis: 34px !important; }
+  .composer .send-button { width: 36px !important; min-width: 36px !important; flex-basis: 36px !important; }
+}
+
+
 /* Mobile keyboard, safe-area and narrow-screen resilience. */
 @media (max-width: 900px) {
   .app {
