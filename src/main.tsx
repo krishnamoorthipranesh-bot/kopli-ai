@@ -7,8 +7,7 @@ import {
   Copy, Download, Eye, EyeOff, FileText, Files, Globe2, Image as ImageIcon, Images, Library,
   LogIn, LogOut, Menu, Mic, CircleHelp, MoreHorizontal, Plus, Search, Share2, LockKeyhole, Folder,
   Send, Settings, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
-  UserRound, Volume2, X, Zap
-} from "lucide-react";
+  UserRound, Volume2, X, Zap,} from "lucide-react";
 import "./styles.css";
 import "./theme.css";
 import "./chat-theme.css";
@@ -270,12 +269,28 @@ function MessageView({
 }) {
   const isUser = message.role === "user";
   const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null);
+  const [imageMenuOpen, setImageMenuOpen] = useState(false);
+  const [imageActionNotice, setImageActionNotice] = useState("");
   useEffect(() => {
     if (!expandedImage) return;
     const closeOnEscape = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setExpandedImage(null); };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [expandedImage]);
+  useEffect(() => { if (!expandedImage) { setImageMenuOpen(false); setImageActionNotice(""); } }, [expandedImage]);
+  async function shareImage() {
+    if (!expandedImage) return;
+    try {
+      if (navigator.share) await navigator.share({ title: expandedImage.alt, url: expandedImage.src });
+      else if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(expandedImage.src); setImageActionNotice("Image link copied"); }
+      else setImageActionNotice("Sharing is not supported on this device");
+    } catch (error) { if (error instanceof Error && error.name !== "AbortError") setImageActionNotice("Could not share this image"); }
+  }
+  async function copyImageLink() {
+    if (!expandedImage) return;
+    try { await navigator.clipboard.writeText(expandedImage.src); setImageMenuOpen(false); setImageActionNotice("Image link copied"); }
+    catch { setImageActionNotice("Could not copy image link"); }
+  }
   async function downloadImage() {
     if (!expandedImage) return;
     try {
@@ -328,11 +343,22 @@ function MessageView({
       </div>
       {expandedImage && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="Image preview" onClick={() => setExpandedImage(null)}>
         <div className="image-lightbox-toolbar" onClick={event => event.stopPropagation()}>
-          <span>{expandedImage.alt}</span>
-          <button type="button" onClick={() => void downloadImage()} aria-label="Download image" title="Download"><Download size={19} /></button>
-          <button type="button" onClick={() => setExpandedImage(null)} aria-label="Close image" title="Close"><X size={19} /></button>
+          <button className="image-viewer-icon-button" type="button" onClick={() => setExpandedImage(null)} aria-label="Close image" title="Close"><X size={25} /></button>
+          <div className="image-viewer-spacer" />
+          <div className="image-viewer-more-wrap">
+            <button className="image-viewer-icon-button" type="button" onClick={() => setImageMenuOpen(value => !value)} aria-label="More image options" title="More"><MoreHorizontal size={23} /></button>
+            {imageMenuOpen && <div className="image-viewer-menu">
+              <button type="button" onClick={() => void copyImageLink()}><Copy size={16} />Copy image link</button>
+              <button type="button" onClick={() => setImageActionNotice("Image details: " + expandedImage.alt)}><ImageIcon size={16} />Image details</button>
+            </div>}
+          </div>
+          <button className="image-viewer-icon-button" type="button" onClick={() => void downloadImage()} aria-label="Download image" title="Download"><Download size={22} /></button>
+          <button className="image-viewer-share-button" type="button" onClick={() => void shareImage()}><Share2 size={17} /><span>Share</span></button>
         </div>
-        <img className="image-lightbox-image" src={expandedImage.src} alt={expandedImage.alt} onClick={event => event.stopPropagation()} />
+        <div className="image-lightbox-stage" onClick={event => event.stopPropagation()}>
+          <img className="image-lightbox-image" src={expandedImage.src} alt={expandedImage.alt} />
+        </div>
+        {imageActionNotice && <div className="image-viewer-notice" role="status">{imageActionNotice}</div>}
       </div>}
     </article>
   );
