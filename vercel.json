@@ -8,5 +8,6 @@
       "source": "/health",
       "destination": "https://kopli-ai-1.onrender.com/health"
     }
-  ]
+  ],
+  "installCommand": "npm install --include=dev"
 }
