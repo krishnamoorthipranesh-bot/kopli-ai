@@ -1545,7 +1545,7 @@ app.post("/api/images/search", imageSearchRateLimit, async (req, res) => {
       return [{
         title: rawTitle,
         url: imageUrl,
-        source: \`https://commons.wikimedia.org/wiki/\${encodeURIComponent(String(page.title || "").replace(/ /g, "_"))}\`,
+        source: `https://commons.wikimedia.org/wiki/${encodeURIComponent(String(page.title || "").replace(/ /g, "_"))}`,
         relevance
       }];
     }).sort((a, b) => b.relevance - a.relevance).slice(0, 4).map(({ relevance: _relevance, ...image }) => image);
