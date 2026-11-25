@@ -1,63 +1,34 @@
-# KOPLI AI – Deployment Audit Report
+# KOPLI AI – Vercel Production Deployment Audit
 
-## 1. Scope & Objective
+## Current production architecture
+- Vercel: Vite/React frontend and Express serverless API.
+- Supabase: PostgreSQL database.
+- Prisma: database ORM and schema.
+- Supabase Storage: private bucket `kopli-user-files`.
+- Groq: AI chat and vision.
+- Cloudflare Workers AI: image generation.
+- Tavily: web research.
+- Resend: optional password-recovery email.
 
-This audit validates the production readiness of **KOPLI AI** for deployment to **Render** using a containerized Docker architecture.
+## Observed deployment state
+- Vercel project `kopli-ai` is configured for the Vite framework.
+- Latest inspected production deployment was `READY` at commit `cb3b8d96fed86c6bb62fb70ba47e9488a989a045`.
+- Supabase project status was `ACTIVE_HEALTHY`.
+- The inspected Vercel runtime log window contained no error/fatal entries.
+- These observations do not replace a real end-to-end production smoke test.
 
----
+## Important readiness blocker
+The Vercel environment-variable inventory did not include `SUPABASE_SERVICE_ROLE_KEY`. Supabase Storage persistence therefore remains unverified and the health endpoint should report degraded/unready until configured. The audit branch makes upload and file-generation routes fail closed in this condition.
 
-## 2. Docker & Container Audit
+## Code/configuration findings
+- Production routing is defined by `vercel.json` and `api/handler.ts`.
+- Prisma database initialization is performed by the serverless handler; automatic migrations are not run on each serverless instance.
+- The CI workflow used an unnecessary personal access token for checkout; the audit branch removes it.
+- An obsolete workflow pinged Render every five minutes; the audit branch removes it.
+- Old Render/Docker files are retained as rollback artifacts only, not used in the production request path.
+- Package and lockfile declarations are inconsistent; deterministic `npm ci` is not yet safe until the lockfile is regenerated and reviewed.
 
-| Component | Status | Findings & Remediation |
-|---|---|---|
-| **Base Image** | **VERIFIED** | `node:22-bookworm-slim` provides modern Node.js runtime with minimal image footprint. |
-| **System Dependencies** | **FIXED** | Added `openssl` and `ca-certificates` in both build and runtime stages to ensure Prisma query engine executes without missing library faults. |
-| **Prisma Generation** | **FIXED** | Added explicit `RUN npx prisma generate` in build stage prior to compilation and copied generated client to runtime. |
-| **Production Runtime Package** | **FIXED** | Moved `tsx` to `dependencies` in `package.json` so `npm ci --omit=dev` retains `tsx` to execute `CMD ["npm", "start"]`. |
-| **Static Assets Layer** | **VERIFIED** | Frontend output in `/app/dist` is copied to runtime and served by Express `express.static(path.join(root, "dist"))`. |
-| **Storage Directories** | **VERIFIED** | `storage/generated` and `storage/uploads` are automatically created on boot via `fs.mkdirSync(..., { recursive: true })`. |
-
----
-
-## 3. Render Blueprint (`render.yaml`) Audit
-
-| Property | Configured Value | Status |
-|---|---|---|
-| **Service Type** | `web` | Verified (Single service architecture) |
-| **Runtime** | `docker` | Verified (Uses repository root `Dockerfile`) |
-| **Plan** | `free` | Verified (No unapproved paid resources created) |
-| **Health Check Path** | `/api/status` | Verified (Returns HTTP 200 with JSON provider statuses) |
-| **PORT Binding** | Dynamic via `$PORT` | Verified (Server binds to `process.env.PORT || 8787`) |
-| **Auto-Generated Secrets** | `KOPLI_ADMIN_SECRET`, `SESSION_SECRET` | Configured with `generateValue: true` |
-| **Sync Secrets** | `GROQ_API_KEY`, `TAVILY_API_KEY`, `STABILITY_API_KEY`, `DATABASE_URL`, `KOPLI_OWNER_EMAIL` | Configured with `sync: false` for secure manual input |
-
----
-
-## 4. Network, Routing & CORS Audit
-
-| Check | Result | Remediation |
-|---|---|---|
-| **SPA Catch-All Route** | **PASS** | `app.use((_req, res) => res.type("html").send(dist/index.html))` serves client routes (`/chat/:mode`, etc.). |
-| **Health Check Endpoint** | **PASS** | `/api/status` returns operational flags for database, Groq, Tavily, Stability AI without authentication. |
-| **Production CORS** | **FIXED** | Origin validation regex previously allowed only `localhost`. Refactored to dynamically accept `*.onrender.com`, `RENDER_EXTERNAL_URL`, same-host origins, and `ALLOWED_ORIGINS`. |
-| **Internal Search Loopback** | **FIXED** | Web-assisted chat (`/api/chat/search`) previously made an internal HTTP loopback fetch to `http://localhost:${PORT}` which could hang or fail under production networking. Replaced with direct helper function `performSearch()`. |
-
----
-
-## 5. Database & Migration Readiness
-
-- **Schema Engine**: Prisma ORM with PostgreSQL provider.
-- **Migration History**: Baseline migration created under `prisma/migrations/0_init/migration.sql`.
-- **Automatic Deployment**: Server initialization runs `npx prisma migrate deploy` safely when `DATABASE_URL` is detected, ensuring tables and foreign keys are created automatically upon connecting a database.
-- **Fallback State**: If `DATABASE_URL` is not provided, the server starts cleanly in local/guest session mode.
-
----
-
-## 6. Build & Bundle Verification
-
-- `npx prisma generate`: Client generated in <100ms.
-- `tsc -b`: Zero TypeScript compiler errors across server and client.
-- `vite build`: Assets bundled successfully:
-  - `dist/index.html`: 0.58 kB
-  - `dist/assets/index-DbGcZIwQ.css`: 73.34 kB (16.15 kB gzip)
-  - `dist/assets/index-DzAK6M--.js`: 443.31 kB (134.22 kB gzip)
+## Not yet verified
+- Durable upload/download across separate serverless invocations and a new deployment.
+- Live Groq, Tavily, Cloudflare image generation, and Resend transactions in this audit session.
+- Full browser E2E, Android physical-device layout QA, and load/penetration testing.
