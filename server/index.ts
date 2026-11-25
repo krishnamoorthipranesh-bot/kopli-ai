@@ -57,7 +57,7 @@ export function isAllowedOrigin(origin?: string, hostHeader?: string): boolean {
   for (const vercelHost of [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]) {
     if (vercelHost && origin.toLowerCase() === `https://${vercelHost.toLowerCase()}`) return true;
   }
-  if (/^https:\/\/[a-z0-9-]+\.onrender\.com$/i.test(origin)) return true;
+
   if (process.env.ALLOWED_ORIGINS) {
     const list = process.env.ALLOWED_ORIGINS.split(",").map(item => item.trim().toLowerCase());
     if (list.includes(origin.toLowerCase())) return true;
@@ -77,7 +77,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(cookieParser());
-app.use(express.json({ limit: "20mb" }));
+app.use(express.json({ limit: "2mb" }));
 
 
 app.use(rateLimit({
@@ -719,6 +719,19 @@ app.get("/api/status", async (_req, res) => {
   });
 });
 
+
+const createCostLimiter = (windowMs: number, limit: number, message: string) => rateLimit({
+  windowMs, limit, standardHeaders: "draft-7", legacyHeaders: false,
+  message: { error: message }
+});
+const aiChatRateLimit = createCostLimiter(60 * 1000, 30, "Chat request limit reached. Please wait a minute and try again.");
+const searchRateLimit = createCostLimiter(60 * 1000, 20, "Search request limit reached. Please wait a minute and try again.");
+const researchRateLimit = createCostLimiter(60 * 1000, 10, "Research request limit reached. Please wait a minute and try again.");
+const imageSearchRateLimit = createCostLimiter(60 * 1000, 20, "Image search limit reached. Please wait a minute and try again.");
+const imageGenerationRateLimit = createCostLimiter(15 * 60 * 1000, 5, "Image generation limit reached. Please wait 15 minutes before generating more images.");
+const uploadRateLimit = createCostLimiter(15 * 60 * 1000, 20, "Upload limit reached. Please wait before uploading more files.");
+const documentRateLimit = createCostLimiter(15 * 60 * 1000, 8, "Document generation limit reached. Please wait 15 minutes before creating more files.");
+
 const authRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-7", legacyHeaders: false });
 
 app.post("/api/auth/register", authRateLimit, async (req, res) => {
@@ -927,12 +940,13 @@ app.get("/api/admin/status", async (req, res) => {
   } });
 });
 
-app.post("/api/chat", async (req, res) => {
+app.post("/api/chat", aiChatRateLimit, async (req, res) => {
   const { conversationId, message, mode = "smart", history = [], attachments = [] } = req.body as {
     conversationId?: string; message?: string; mode?: string; history?: Array<{ role: "user" | "assistant"; content: string }>;
     attachments?: Array<{ id?: string; mimeType?: string; fileName?: string }>;
   };
   if (!message?.trim()) return res.status(400).json({ error: "Message cannot be empty." });
+  if (message.length > 32000) return res.status(413).json({ error: "Messages must be 32,000 characters or fewer. Attach large documents instead." });
   const authenticatedUser = await currentUser(req);
   if (message.trim() === "/admin") {
     const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
@@ -1298,7 +1312,7 @@ async function performSearch(prompt: string): Promise<{ query: string; queries: 
   return { query: prompt, queries, sources: sources.slice(0, 20) };
 }
 
-app.post("/api/search", async (req, res) => {
+app.post("/api/search", searchRateLimit, async (req, res) => {
   const prompt = String(req.body?.query || "").trim();
   if (!prompt) return res.status(400).json({ error: "Search query cannot be empty." });
   if (!configured(process.env.TAVILY_API_KEY)) return res.status(503).json({ error: "Web search is temporarily unavailable. Please try again later.", sources: [] });
@@ -1310,7 +1324,7 @@ app.post("/api/search", async (req, res) => {
   }
 });
 
-app.post("/api/chat/search", async (req, res) => {
+app.post("/api/chat/search", researchRateLimit, async (req, res) => {
   const prompt = String(req.body?.message || req.body?.query || "").trim();
   if (!prompt) return res.status(400).json({ error: "Search prompt cannot be empty." });
   if (!configured(process.env.TAVILY_API_KEY) || !groq) return res.status(503).json({ error: "Web-assisted chat is temporarily unavailable. Please try again later." });
@@ -1381,7 +1395,7 @@ app.post("/api/chat/search", async (req, res) => {
   res.json({ answer, sources, conversationId });
 });
 
-app.post("/api/images/search", async (req, res) => {
+app.post("/api/images/search", imageSearchRateLimit, async (req, res) => {
   const prompt = String(req.body?.prompt || "").trim();
   if (!prompt) return res.status(400).json({ error: "Image search prompt cannot be empty." });
   if (prompt.length > 500) return res.status(400).json({ error: "Image search prompts must be 500 characters or fewer." });
@@ -1441,7 +1455,7 @@ app.post("/api/images/search", async (req, res) => {
   }
 });
 
-app.post("/api/images/generate", async (req, res) => {
+app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to generate images." });
   const prompt = String(req.body?.prompt || "").trim();
@@ -1587,7 +1601,7 @@ app.get("/api/images/:imageId", async (req, res) => {
   res.send(bytes);
 });
 
-app.post("/api/upload", upload.array("files", 10), async (req, res) => {
+app.post("/api/upload", uploadRateLimit, upload.array("files", 10), async (req, res) => {
   const user = await currentUser(req);
   const rawFiles = req.files as Express.Multer.File[] || [];
   const files = rawFiles.flatMap(file => {
@@ -1901,7 +1915,7 @@ async function generateFile(req: express.Request, res: express.Response) {
   }
 }
 
-app.post("/api/documents/draft", async (req, res) => {
+app.post("/api/documents/draft", documentRateLimit, async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to create documents." });
   const prompt = String(req.body?.prompt || "").trim();
@@ -1916,7 +1930,7 @@ app.post("/api/documents/draft", async (req, res) => {
   }
 });
 
-app.post("/api/documents/export", async (req, res) => {
+app.post("/api/documents/export", documentRateLimit, async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to export documents." });
   const title = String(req.body?.title || "KOPLI AI Document").trim().slice(0, 160) || "KOPLI AI Document";
@@ -1939,9 +1953,9 @@ app.post("/api/documents/export", async (req, res) => {
   }
 });
 
-app.post("/api/documents/generate", generateFile);
-app.post("/api/presentations/generate", generateFile);
-app.post("/api/pdf/generate", generateFile);
+app.post("/api/documents/generate", documentRateLimit, generateFile);
+app.post("/api/presentations/generate", documentRateLimit, generateFile);
+app.post("/api/pdf/generate", documentRateLimit, generateFile);
 
 app.get("/api/files/:fileName", async (req, res) => {
   const user = await currentUser(req);
