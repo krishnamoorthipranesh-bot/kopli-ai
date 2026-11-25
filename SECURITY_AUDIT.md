@@ -23,6 +23,9 @@ Source-level review of the Vercel/Express API, authentication/session handling, 
 - Resend email delivery and sender verification are not currently proven by a live send test.
 - No independent penetration test, production load test, or physical Android visual QA is claimed.
 
+## Dependency vulnerability inventory
+The latest CI dependency inventory reports 7 high-severity findings and 0 critical findings: `@prisma/config` / `prisma` (through `deepmerge-ts` and `effect`), `pptxgenjs` / `image-size`, and `xlsx`. The available Prisma and PptxGenJS fixes require major-version changes; `xlsx` has no fix available through npm. No `npm audit fix --force` was run. Review and upgrade these packages in isolated compatibility-tested changes. The CI inventory step is non-blocking, so a green CI result does not mean the dependency tree is vulnerability-free.
+
 ## Required operational safeguards
 - Store all secrets only in server-side Vercel environment variables.
 - Rotate credentials that have been pasted into public logs, repository files, or untrusted channels.
