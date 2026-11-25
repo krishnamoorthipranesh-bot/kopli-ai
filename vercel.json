@@ -1,12 +1,22 @@
 {
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "https://kopli-ai-1.onrender.com/api/:path*"
+      "source": "/health",
+      "destination": "/api/handler?__originalPath=/health"
     },
     {
-      "source": "/health",
-      "destination": "https://kopli-ai-1.onrender.com/health"
+      "source": "/api/:path*",
+      "destination": "/api/handler?__originalPath=/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
-  ]
+  ],
+  "installCommand": "npm install --include=dev",
+  "functions": {
+    "api/handler.ts": {
+      "includeFiles": "server/server-bundle.mjs"
+    }
+  }
 }

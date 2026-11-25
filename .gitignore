@@ -8,3 +8,5 @@ storage
 !.env.example
 server/*.js
 *.tsbuildinfo
+
+server/server-bundle.mjs

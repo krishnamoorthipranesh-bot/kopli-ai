@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite\"",
-    "build": "prisma generate && tsc -b && vite build",
+    "build": "prisma generate && tsc -b && esbuild server/index.ts --bundle --platform=node --format=esm --target=node22 --packages=external --outfile=server/server-bundle.mjs && vite build",
     "start": "tsx server/index.ts",
     "test": "vitest run"
   },
@@ -25,7 +25,7 @@
     "lucide-react": "latest",
     "mammoth": "^1.13.0",
     "multer": "latest",
-    "pdf-parse": "^2.4.5",
+    "pdf-parse": "1.1.1",
     "pdfkit": "latest",
     "pptxgenjs": "latest",
     "react": "latest",
@@ -34,10 +34,7 @@
     "remark-gfm": "latest",
     "tsx": "^4.23.15",
     "xlsx": "latest"
-
-
-
-},
+  },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "latest",
@@ -50,8 +47,9 @@
     "concurrently": "latest",
     "prisma": "^6.19.0",
     "tsx": "latest",
-    "typescript": "latest",
+    "typescript": "5.9.3",
     "vite": "latest",
-    "vitest": "latest"
+    "vitest": "latest",
+    "esbuild": "0.28.2"
   }
 }

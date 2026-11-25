@@ -10,16 +10,18 @@ import multer from "multer";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import crypto from "node:crypto";
 import { inflateRawSync } from "node:zlib";
 import Groq from "groq-sdk";
-import { GeminiProviderError, isTransientProviderError, streamGeminiResponse } from "./gemini-provider.js";
+
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, Header, Footer } from "docx";
 import PDFDocument from "pdfkit";
-import PptxGenJS from "pptxgenjs";
+const require = createRequire(import.meta.url);
+const PptxGenJS = require("pptxgenjs");
 import rateLimit from "express-rate-limit";
 import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
+import pdfParse from "pdf-parse/lib/pdf-parse.js";
 import * as XLSX from "xlsx";
 import { tavily } from "@tavily/core";
 import { PrismaClient } from "@prisma/client";
@@ -27,7 +29,7 @@ import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import bcrypt from "bcryptjs";
 import { containsSensitiveSecret, isPastContextQuery, memoryKeywords } from "./memory-utils.js";
-import { aiConfig, securityConfig } from "./config";
+import { aiConfig, securityConfig } from "./config.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -52,6 +54,9 @@ export function isAllowedOrigin(origin?: string, hostHeader?: string): boolean {
   if (!origin) return true;
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) return true;
   if (process.env.RENDER_EXTERNAL_URL && origin.toLowerCase() === process.env.RENDER_EXTERNAL_URL.toLowerCase()) return true;
+  for (const vercelHost of [process.env.VERCEL_URL, process.env.VERCEL_BRANCH_URL, process.env.VERCEL_PROJECT_PRODUCTION_URL]) {
+    if (vercelHost && origin.toLowerCase() === `https://${vercelHost.toLowerCase()}`) return true;
+  }
   if (/^https:\/\/[a-z0-9-]+\.onrender\.com$/i.test(origin)) return true;
   if (process.env.ALLOWED_ORIGINS) {
     const list = process.env.ALLOWED_ORIGINS.split(",").map(item => item.trim().toLowerCase());
@@ -83,7 +88,7 @@ app.use(rateLimit({
 }));
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const storage = path.join(root, "storage");
+const storage = process.env.VERCEL ? path.join("/tmp", "kopli-ai-storage") : path.join(root, "storage");
 const generated = path.join(storage, "generated");
 const uploads = path.join(storage, "uploads");
 for (const dir of [storage, generated, uploads]) fs.mkdirSync(dir, { recursive: true });
@@ -705,11 +710,11 @@ app.get("/api/status", async (_req, res) => {
   }
   res.json({
     groq: configured(process.env.GROQ_API_KEY),
-    gemini: configured(process.env.GEMINI_API_KEY),
+    gemini: false,
     tavily: configured(process.env.TAVILY_API_KEY),
     cloudflareAi: Boolean(configured(process.env.CLOUDFLARE_ACCOUNT_ID) && configured(process.env.CLOUDFLARE_API_TOKEN)),
     database,
-    demo: !configured(process.env.GROQ_API_KEY) && !configured(process.env.GEMINI_API_KEY),
+    demo: !configured(process.env.GROQ_API_KEY),
     model: aiConfig.groqModel
   });
 });
@@ -915,7 +920,7 @@ app.get("/api/admin/status", async (req, res) => {
   if (!sessionUser || sessionUser.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
   res.json({ authorized: true, providerStatus: {
     groq: configured(process.env.GROQ_API_KEY),
-    gemini: configured(process.env.GEMINI_API_KEY),
+    gemini: false,
     tavily: configured(process.env.TAVILY_API_KEY),
     cloudflareAi: Boolean(configured(process.env.CLOUDFLARE_ACCOUNT_ID) && configured(process.env.CLOUDFLARE_API_TOKEN)),
     database: Boolean(prisma)
@@ -964,10 +969,7 @@ app.post("/api/chat", async (req, res) => {
     if (totalImageBytes > 15 * 1024 * 1024) return res.status(413).json({ error: "Keep attached images under 15 MB combined for reliable AI analysis." });
     imageInputs.push({ mimeType, dataUrl: `data:${mimeType};base64,${bytes.toString("base64")}` });
   }
-  const geminiConfigured = configured(process.env.GEMINI_API_KEY);
-  if (imageInputs.length && !groq && !geminiConfigured) {
-    return res.status(503).json({ error: "Image analysis is unavailable because neither Gemini nor Groq is configured on the server." });
-  }
+  if (!groq) return res.status(503).json({ error: "KOPLI AI is not configured yet. Add GROQ_API_KEY to enable AI chat and image analysis." });
   const id = conversationId || crypto.randomUUID();
   let safeHistory = Array.isArray(history)
     ? history.filter(item =>
@@ -1048,7 +1050,7 @@ app.post("/api/chat", async (req, res) => {
   res.write(`data: ${JSON.stringify({ conversationId: id })}\n\n`);
 
   let assistantFull = "";
-  if (!groq && !geminiConfigured) {
+  if (!groq) {
     const text = demoReply(message);
     assistantFull = text;
     for (const word of text.split(/(\s+)/)) {
@@ -1142,26 +1144,6 @@ app.post("/api/chat", async (req, res) => {
         assistantFull += text;
         if (!res.destroyed) res.write(`data: ${JSON.stringify({ text })}\n\n`);
       };
-      const runGemini = async () => {
-        let streamed = "";
-        for await (const text of streamGeminiResponse({
-          apiKey: process.env.GEMINI_API_KEY || "",
-          model: process.env.GEMINI_MODEL,
-          systemInstruction: protectedSystem + memoryContext,
-          history: safeHistory,
-          prompt: message,
-          images: imageInputs,
-          temperature: mode === "coding" ? 0.2 : mode === "reasoning" ? 0.4 : 0.7,
-          maxOutputTokens: mode === "fast" ? 800 : 2048,
-          signal: providerAbort.signal
-        })) {
-          if (clientDisconnected || res.destroyed) break;
-          streamed += text;
-          emitText(text);
-        }
-        if (!streamed && !clientDisconnected) throw new GeminiProviderError(502, "Gemini returned no text for this request.");
-        if (streamed) conversation.messages.push({ role: "assistant", content: streamed });
-      };
       const runGroq = async () => {
         if (!groq) throw new Error("Groq is not configured.");
         const stream = await groq.chat.completions.create({
@@ -1182,28 +1164,10 @@ app.post("/api/chat", async (req, res) => {
         }
         if (streamed) conversation.messages.push({ role: "assistant", content: streamed });
       };
-      if (imageInputs.length && geminiConfigured) {
-        const responseStart = assistantFull.length;
-        try {
-          await runGemini();
-        } catch (error) {
-          if (!groq || clientDisconnected || assistantFull.length !== responseStart) throw error;
-          await runGroq();
-        }
-      } else if (groq) {
-        const responseStart = assistantFull.length;
-        try {
-          await runGroq();
-        } catch (error) {
-          if (!geminiConfigured || !isTransientProviderError(error) || clientDisconnected || assistantFull.length !== responseStart) throw error;
-          await runGemini();
-        }
-      } else {
-        await runGemini();
-      }
+      await runGroq();
     } catch (error: any) {
       if (!res.destroyed && !clientDisconnected) {
-        const message = error instanceof GeminiProviderError ? error.message : error?.message || "AI provider request failed.";
+        const message = error?.message || "Groq AI provider request failed.";
         res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
       }
     }
@@ -1610,10 +1574,8 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
     let text = "";
     let method = "";
     if (mimeType === "application/pdf" || fileId.toLowerCase().endsWith(".pdf")) {
-      const parser = new PDFParse({ data: fs.readFileSync(file) });
-      const parsed = await parser.getText();
+      const parsed = await pdfParse(fs.readFileSync(file));
       text = parsed.text;
-      await parser.destroy();
       method = "PDF text extraction";
     } else if (mimeType.includes("wordprocessingml") || fileId.toLowerCase().endsWith(".docx")) {
       const parsed = await mammoth.extractRawText({ buffer: fs.readFileSync(file) });
@@ -2005,27 +1967,28 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
   res.status(status >= 400 && status < 600 ? status : 500).json({ error: status === 413 ? "The request is too large." : "The request could not be completed." });
 });
 
-app.get("/health", (_req, res) => res.json({
+app.get(["/health", "/api/health"], (_req, res) => res.json({
   status: databaseStatus === "unavailable" ? "degraded" : databaseStatus === "starting" ? "starting" : "ok",
   ready: true,
   persistence: databaseStatus
 }));
 
-app.use(express.static(path.join(root, "dist")));
-app.get("/chat/:mode", (_req, res) => {
+if (!process.env.VERCEL) app.use(express.static(path.join(root, "dist")));
+if (!process.env.VERCEL) app.get("/chat/:mode", (_req, res) => {
   const indexFile = path.join(root, "dist", "index.html");
   if (!fs.existsSync(indexFile)) return res.status(500).json({ error: "Built application index is missing." });
   res.type("html").send(fs.readFileSync(indexFile));
 });
 app.use((_req, res) => {
+  if (process.env.VERCEL) return res.status(404).json({ error: "API route not found." });
   const indexFile = path.join(root, "dist", "index.html");
   if (!fs.existsSync(indexFile)) return res.status(500).json({ error: "Built application index is missing." });
   res.type("html").send(fs.readFileSync(indexFile));
 });
 
-export { app };
+export { app, initializeDatabase };
 const port = Number(process.env.PORT || 8787);
-if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+if (process.env.NODE_ENV !== "test" && !process.env.VITEST && !process.env.VERCEL) {
   app.listen(port, () => {
     console.log(`KOPLI AI server listening on http://localhost:${port}`);
     void initializeDatabase();
