@@ -794,6 +794,8 @@ app.get("/api/status", async (_req, res) => {
     tavily: configured(process.env.TAVILY_API_KEY),
     cloudflareAi: Boolean(configured(process.env.CLOUDFLARE_ACCOUNT_ID) && configured(process.env.CLOUDFLARE_API_TOKEN)),
     database,
+    persistentFileStorage: !process.env.VERCEL || persistentStorageConfigured(),
+    fileStorageMode: process.env.VERCEL ? (persistentStorageConfigured() ? "supabase" : "temporary") : "local",
     demo: !configured(process.env.GROQ_API_KEY),
     model: aiConfig.groqModel
   });
@@ -1262,8 +1264,8 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
       await runGroq();
     } catch (error: any) {
       if (!res.destroyed && !clientDisconnected) {
-        const message = error?.message || "Groq AI provider request failed.";
-        res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
+        console.error("Chat provider request failed.", error);
+        res.write(`data: ${JSON.stringify({ error: "The AI service could not complete this response. Please retry." })}\n\n`);
       }
     }
   }
@@ -1827,7 +1829,10 @@ async function generateStructuredContent(prompt: string, topic: string, format: 
       const bodyParagraphs = json.sections.flatMap((section: any) => Array.isArray(section?.paragraphs) ? section.paragraphs : [])
         .filter((paragraph: unknown) => typeof paragraph === "string" && paragraph.trim().length >= 45);
       const bodyWords = bodyParagraphs.join(" ").trim().split(/\s+/).filter(Boolean).length;
-      if (bodyParagraphs.length < 3 || bodyWords < 120) throw new Error("The document draft is incomplete: substantive body paragraphs are missing.");
+      const shortRequested = /\b(short|brief|concise|one[- ]page|summary|abstract)\b/i.test(prompt);
+      const minimumParagraphs = shortRequested ? 3 : 6;
+      const minimumWords = shortRequested ? 120 : 500;
+      if (bodyParagraphs.length < minimumParagraphs || bodyWords < minimumWords) throw new Error("The document draft is incomplete. Please retry so the full requested content can be generated.");
     }
     return json;
   } catch (error) {
@@ -2135,11 +2140,17 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
   res.status(status >= 400 && status < 600 ? status : 500).json({ error: status === 413 ? "The request is too large." : "The request could not be completed." });
 });
 
-app.get(["/health", "/api/health"], (_req, res) => res.json({
-  status: databaseStatus === "unavailable" ? "degraded" : databaseStatus === "starting" ? "starting" : "ok",
-  ready: true,
-  persistence: databaseStatus
-}));
+app.get(["/health", "/api/health"], (_req, res) => {
+  const ready = databaseStatus !== "unavailable" && databaseStatus !== "starting";
+  const fileStorageReady = !process.env.VERCEL || persistentStorageConfigured();
+  return res.status(ready ? 200 : 503).json({
+    status: ready ? "ok" : "degraded",
+    ready,
+    persistence: databaseStatus,
+    fileStorage: fileStorageReady ? "persistent" : "temporary",
+    fileStorageConfigured: fileStorageReady
+  });
+});
 
 if (!process.env.VERCEL) app.use(express.static(path.join(root, "dist")));
 if (!process.env.VERCEL) app.get("/chat/:mode", (_req, res) => {
