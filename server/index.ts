@@ -1748,13 +1748,17 @@ app.post("/api/images/edit", imageGenerationRateLimit, imageEditUpload.single("i
       if (!outputUrl.hostname.endsWith(".aig.cloudflare.com")) {
         return res.status(502).json({ error: "Cloudflare returned an untrusted image URL." });
       }
-      const imageResponse = await fetch(outputUrl, { signal: AbortSignal.timeout(30000) });
+      const imageResponse = await fetch(outputUrl, { redirect: "error", signal: AbortSignal.timeout(30000) });
       if (!imageResponse.ok) return res.status(502).json({ error: "The edited image could not be downloaded from Cloudflare." });
       const contentType = imageResponse.headers.get("content-type") || "";
       if (!["image/png", "image/jpeg", "image/webp"].includes(contentType.split(";")[0])) {
         return res.status(502).json({ error: "Cloudflare returned an unsupported image format." });
       }
-      outputBytes = Buffer.from(await imageResponse.arrayBuffer());
+      const contentLength = Number(imageResponse.headers.get("content-length") || 0);
+      if (contentLength > 16 * 1024 * 1024) return res.status(502).json({ error: "The edited image is larger than the supported 16 MB output limit." });
+      const outputBuffer = Buffer.from(await imageResponse.arrayBuffer());
+      if (outputBuffer.length > 16 * 1024 * 1024) return res.status(502).json({ error: "The edited image is larger than the supported 16 MB output limit." });
+      outputBytes = outputBuffer;
     } else if (typeof imageResult === "string") {
       outputBytes = Buffer.from(imageResult, "base64");
     }
