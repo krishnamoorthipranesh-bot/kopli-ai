@@ -9,6 +9,7 @@ import cors from "cors";
 import multer from "multer";
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import crypto from "node:crypto";
@@ -1790,7 +1791,22 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
       const parsed = await mammoth.extractRawText({ buffer: fileBytes });
       text = parsed.value;
       method = "DOCX text extraction";
-    } else if (mimeType.includes("spreadsheet") || /\.(xlsx|xls|csv)$/i.test(fileId)) {
+    } else if (mimeType === "text/csv" || /\.csv$/i.test(fileId)) {
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = await workbook.csv.read(Readable.from(fileBytes));
+      const rows: string[] = [];
+      worksheet.eachRow({ includeEmpty: false }, row => {
+        const values: string[] = [];
+        row.eachCell({ includeEmpty: true }, (cell, columnNumber) => {
+          values[columnNumber - 1] = cell.value === null || cell.value === undefined ? "" : String(cell.value);
+        });
+        rows.push(values.join("\t"));
+      });
+      text = `## ${worksheet.name}\n${rows.join("\n")}`;
+      method = "CSV text extraction";
+    } else if (mimeType === "application/vnd.ms-excel" || /\.xls$/i.test(fileId)) {
+      return res.status(415).json({ error: "Legacy .xls files are not supported safely. Save the spreadsheet as .xlsx or .csv and upload it again." });
+    } else if (mimeType.includes("spreadsheet") || /\.xlsx$/i.test(fileId)) {
       const workbook = new ExcelJS.Workbook();
       await workbook.xlsx.load(Buffer.from(fileBytes) as unknown as Buffer);
       const cellText = (value: unknown): string => {
