@@ -76,6 +76,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(cookieParser());
+// Base64-encoded reference images need headroom beyond their decoded binary size.
 app.use(express.json({ limit: "3mb" }));
 
 
