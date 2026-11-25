@@ -1273,7 +1273,7 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
           temperature: mode === "coding" ? 0.2 : mode === "reasoning" ? 0.4 : 0.7,
           max_tokens: mode === "fast" ? 2048 : 8192,
           stream: true
-        });
+        }, { signal: providerAbort.signal });
         let streamed = "";
         for await (const chunk of stream) {
           if (clientDisconnected || res.destroyed) break;
