@@ -1381,6 +1381,66 @@ app.post("/api/chat/search", async (req, res) => {
   res.json({ answer, sources, conversationId });
 });
 
+app.post("/api/images/search", async (req, res) => {
+  const prompt = String(req.body?.prompt || "").trim();
+  if (!prompt) return res.status(400).json({ error: "Image search prompt cannot be empty." });
+  if (prompt.length > 500) return res.status(400).json({ error: "Image search prompts must be 500 characters or fewer." });
+  let query = prompt
+    .replace(/\b(show me|find me|search for|look for|give me|send me|photo|photograph|picture|image|portrait|wallpaper|of|please|the)\b/gi, " ")
+    .replace(/\s+/g, " ").trim() || prompt;
+  if (groq) {
+    try {
+      const completion = await groq.chat.completions.create({
+        model: aiConfig.groqModel,
+        temperature: 0,
+        max_tokens: 80,
+        messages: [
+          { role: "system", content: "Convert the user's request into a concise English Wikimedia Commons image-search query naming only the exact requested subject. Translate names and descriptions when needed. Do not add generic stock-photo terms, styles, or unrelated concepts. Return only the search query." },
+          { role: "user", content: prompt }
+        ]
+      });
+      query = (completion.choices[0]?.message?.content || query).trim().replace(/^["']|["']$/g, "").slice(0, 180) || query;
+    } catch (error) {
+      console.error("Image search query normalization failed; using the original subject.", error);
+    }
+  }
+  try {
+    const params = new URLSearchParams({
+      action: "query",
+      generator: "search",
+      gsrsearch: query,
+      gsrnamespace: "6",
+      gsrlimit: "8",
+      prop: "imageinfo",
+      iiprop: "url|mime",
+      iiurlwidth: "1280",
+      format: "json"
+    });
+    const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params.toString()}`, {
+      headers: { "User-Agent": "KOPLI-AI/1.0 (relevant image search)" },
+      signal: AbortSignal.timeout(20000)
+    });
+    if (!response.ok) throw new Error(`Wikimedia Commons returned HTTP ${response.status}.`);
+    const payload: any = await response.json();
+    const pages = Object.values(payload?.query?.pages || {}) as any[];
+    const images = pages.flatMap(page => {
+      const info = page?.imageinfo?.[0];
+      const imageUrl = info?.thumburl || info?.url;
+      if (!imageUrl || !/^https:\/\//i.test(imageUrl) || !String(info?.mime || "").startsWith("image/")) return [];
+      const title = String(page.title || "Image").replace(/^File:/i, "");
+      return [{
+        title,
+        url: imageUrl,
+        source: `https://commons.wikimedia.org/wiki/${encodeURIComponent(String(page.title || "").replace(/ /g, "_"))}`
+      }];
+    }).slice(0, 4);
+    return res.json({ query, images });
+  } catch (error: any) {
+    console.error("Relevant image search failed.", error);
+    return res.status(502).json({ error: "Relevant image search is temporarily unavailable. Please try again." });
+  }
+});
+
 app.post("/api/images/generate", async (req, res) => {
   const user = await currentUser(req);
   if (!user) return res.status(401).json({ error: "Sign in to generate images." });
@@ -1635,12 +1695,13 @@ async function generateStructuredContent(prompt: string, topic: string, format: 
     ? `Create a factually careful, polished presentation in valid JSON. Return only JSON with keys title, subtitle, slides. Create exactly ${slideCount || 10} distinct, logically ordered slides including a title slide, clear learning progression, practical/example slide where relevant, and conclusion. Each slide must have title, 4-6 concise but meaningful bullets, and layout ("title","content","comparison","diagram","conclusion"). Do not repeat ideas or pad slides. Use only reliable, well-established facts; do not invent statistics, quotations, citations, studies, dates, or named sources. Distinguish uncertainty. Make bullets specific, useful, readable, and appropriate for the requested audience. For technical topics, preserve correct terminology, formulas, units, and steps. For diagrams, describe a coherent process or relationship in bullets rather than inventing unsupported details.`
     : format === "xlsx"
       ? "Create an accurate, usable spreadsheet. Return only valid JSON with title, columns (2-12 clear column labels), and rows (up to 100 arrays matching the exact column count). Preserve all user-provided values, units, dates, names, and formulas exactly. Do not fabricate real-world data; use clearly labeled sample data only when the user asks for examples. Keep types consistent within columns, avoid duplicate rows, include totals only when they can be calculated from supplied data, and do not silently estimate missing values. Use concise headers and logical row order."
-      : "Create a complete, accurate, professionally structured document in valid JSON with title, subtitle, and sections. Each section has a clear heading and substantive paragraphs. Follow the requested audience, scope, length, and format. Include a concise introduction, logically ordered sections, practical examples or steps where useful, and a clear conclusion. Preserve user-provided facts, figures, names, units, and dates exactly. Do not fabricate statistics, sources, quotations, references, or legal, medical, or technical claims. State uncertainty and assumptions explicitly; do not invent missing critical facts. Avoid repetition, filler, generic padding, and contradictory sections. Use precise terminology and actionable detail.";
+      : "Create a complete, detailed, ready-to-use document in valid JSON with title, subtitle, and sections. Never return headings alone. Each of 4-8 sections must contain 2-4 substantive paragraphs with complete explanations, useful detail, examples, steps, and transitions as appropriate; include an introduction and a meaningful conclusion. Unless the user explicitly requests a short note, aim for at least 700-1,200 words total. Follow the requested audience, scope, length, and format. Preserve user-provided facts, figures, names, units, and dates exactly. Do not fabricate statistics, sources, quotations, references, or legal, medical, or technical claims. State uncertainty and assumptions explicitly; do not invent missing critical facts. Avoid repetition, filler, generic padding, and contradictory sections. Every paragraph must add useful information and be complete prose, not a heading or fragment.";
   let raw = "";
   try {
     const response = await groq.chat.completions.create({
       model: aiConfig.groqModel,
       temperature: 0.15,
+      max_tokens: format === "pptx" ? 7000 : 8192,
       messages: [
         { role: "system", content: systemPrompt + "\n\n" + proprietaryDisclosurePolicy },
         { role: "user", content: `Topic/request: ${prompt}\nTopic title: ${topic}` }
@@ -1657,6 +1718,12 @@ async function generateStructuredContent(prompt: string, topic: string, format: 
     if (format === "pptx" && (!Array.isArray(json.slides) || !json.slides.length)) throw new Error("Missing slide data.");
     if (format === "xlsx" && (!Array.isArray(json.columns) || json.columns.length < 2 || !Array.isArray(json.rows) || !json.rows.length)) throw new Error("Missing spreadsheet data.");
     if ((format === "docx" || format === "pdf") && (!Array.isArray(json.sections) || !json.sections.length)) throw new Error("Missing document sections.");
+    if (format === "docx" || format === "pdf") {
+      const bodyParagraphs = json.sections.flatMap((section: any) => Array.isArray(section?.paragraphs) ? section.paragraphs : [])
+        .filter((paragraph: unknown) => typeof paragraph === "string" && paragraph.trim().length >= 45);
+      const bodyWords = bodyParagraphs.join(" ").trim().split(/\s+/).filter(Boolean).length;
+      if (bodyParagraphs.length < 3 || bodyWords < 120) throw new Error("The document draft is incomplete: substantive body paragraphs are missing.");
+    }
     return json;
   } catch (error) {
     console.error("AI provider returned invalid structured file content.", error);
