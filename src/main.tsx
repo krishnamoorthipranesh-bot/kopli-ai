@@ -7,8 +7,7 @@ import {
   Copy, Download, Eye, EyeOff, FileText, Files, Globe2, Image as ImageIcon, Images, Library,
   LogIn, LogOut, Menu, Mic, CircleHelp, MoreHorizontal, Plus, Search, Share2, LockKeyhole, Folder,
   Send, Settings, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
-  UserRound, Volume2, X, Zap, Pencil, Crop, Eraser
-} from "lucide-react";
+  UserRound, Volume2, X, Zap,} from "lucide-react";
 import "./styles.css";
 import "./theme.css";
 import "./chat-theme.css";
@@ -360,12 +359,6 @@ function MessageView({
           <img className="image-lightbox-image" src={expandedImage.src} alt={expandedImage.alt} />
         </div>
         {imageActionNotice && <div className="image-viewer-notice" role="status">{imageActionNotice}</div>}
-        <div className="image-viewer-bottom-actions" onClick={event => event.stopPropagation()}>
-          <button type="button" onClick={() => setImageActionNotice("Image editing will be available here soon")}><Pencil size={23} /><span>Edit</span></button>
-          <button type="button" onClick={() => setImageActionNotice("Markup tools will be available here soon")}><span className="image-viewer-markup-icon">〰</span><span>Markup</span></button>
-          <button type="button" onClick={() => setImageActionNotice("Resize tools will be available here soon")}><Crop size={23} /><span>Resize</span></button>
-          <button type="button" onClick={() => setExpandedImage(null)}><Eraser size={23} /><span>Remove</span></button>
-        </div>
       </div>}
     </article>
   );
