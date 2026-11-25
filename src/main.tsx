@@ -272,7 +272,7 @@ function MessageView({
   const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null);
   useEffect(() => {
     if (!expandedImage) return;
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setExpandedImage(null); };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setExpandedImage(null); };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [expandedImage]);
@@ -957,7 +957,7 @@ function App() {
         );
         const images = Array.isArray(result.images) ? result.images.slice(0, 4) : [];
         const assistantContent = images.length
-          ? `Relevant images for **${text}**:\n\n${images.map(image => `![${image.title.replace(/[\\[\\]()]/g, "")}](${image.url})\n\n[Image source] (${image.source})`).join("\n\n")}`
+          ? `Relevant images for **${text}**:\n\n${images.map(image => `![${image.title.replace(/[\\[\\]()]/g, "")}](${image.url})\n\n[Image source](${image.source})`).join("\n\n")}`
           : `I couldn't find a relevant image for **${text}**. Try the person's full name or a more specific subject. I won't substitute an unrelated stock photo.`;
         await request(`/api/conversations/${encodeURIComponent(conversationId)}/artifacts`, jsonRequest("POST", {
           userMessage: text, assistantMessage: assistantContent, title: text.slice(0, 60), mode
