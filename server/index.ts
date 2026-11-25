@@ -169,6 +169,18 @@ async function readUserFile(record: { path: string } | null | undefined, fallbac
   if (!localPath || !fs.existsSync(localPath)) return null;
   return fs.promises.readFile(localPath);
 }
+async function cleanupExpiredGuestUploads() {
+  if (!prisma || !persistentStorageConfigured()) return;
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const expired = await prisma.storedFile.findMany({
+    where: { userId: null, kind: "guest-upload", createdAt: { lt: cutoff } },
+    select: { id: true, path: true }
+  });
+  for (const record of expired) {
+    if (record.path.startsWith("supabase://")) await deletePersistentObject(record.path.slice("supabase://".length)).catch(() => undefined);
+    await prisma.storedFile.deleteMany({ where: { id: record.id, userId: null } });
+  }
+}
 
 
 const conversations = new Map<string, { id: string; title: string; archived: boolean; pinned: boolean; mode: string; messages: Array<{ role: "user" | "assistant"; content: string }> }>();
@@ -1700,22 +1712,52 @@ app.post("/api/upload", uploadRateLimit, upload.array("files", 10), async (req, 
     for (const file of rawFiles) await fs.promises.unlink(path.join(uploads, file.filename)).catch(() => undefined);
     return res.status(422).json({ error: "One or more files failed MIME and file-signature validation. No files were attached." });
   }
-  if (user && prisma && databaseReady) {
+  if (prisma && databaseReady && persistentStorageConfigured()) {
     const savedIds: string[] = [];
     try {
+      if (!user) await cleanupExpiredGuestUploads();
       for (const item of files) {
-        const raw = rawFiles.find(file => file.filename === item.id)!;
         const localPath = path.join(uploads, item.id);
         const bytes = await fs.promises.readFile(localPath);
-        await saveUserFile({ id: item.id, userId: user.id, name: item.id, mimeType: item.mimeType, bytes, kind: "upload", localPath });
+        if (user) {
+          await saveUserFile({ id: item.id, userId: user.id, name: item.id, mimeType: item.mimeType, bytes, kind: "upload", localPath });
+        } else {
+          const objectPath = `guest/${item.id}`;
+          await uploadPersistentObject(objectPath, bytes, item.mimeType);
+          try {
+            await prisma.storedFile.create({ data: {
+              id: item.id, userId: null, name: item.id, mimeType: item.mimeType,
+              size: bytes.length, path: `supabase://${objectPath}`, kind: "guest-upload"
+            } });
+          } catch (error) {
+            await deletePersistentObject(objectPath).catch(() => undefined);
+            throw error;
+          }
+          await fs.promises.unlink(localPath).catch(() => undefined);
+        }
         savedIds.push(item.id);
       }
     } catch (error) {
       for (const id of savedIds) {
         const record = await prisma.storedFile.findUnique({ where: { id } }).catch(() => null);
         if (record?.path.startsWith("supabase://")) await deletePersistentObject(record.path.slice("supabase://".length)).catch(() => undefined);
-        await prisma.storedFile.deleteMany({ where: { id, userId: user.id } }).catch(() => undefined);
+        await prisma.storedFile.deleteMany({ where: { id } }).catch(() => undefined);
       }
+      for (const file of rawFiles) await fs.promises.unlink(path.join(uploads, file.filename)).catch(() => undefined);
+      console.error("Could not persist uploaded files.", error);
+      return res.status(503).json({ error: "The files could not be safely saved. Please try again." });
+    }
+  } else if (user && prisma && databaseReady) {
+    const savedIds: string[] = [];
+    try {
+      for (const item of files) {
+        const localPath = path.join(uploads, item.id);
+        const bytes = await fs.promises.readFile(localPath);
+        await saveUserFile({ id: item.id, userId: user.id, name: item.id, mimeType: item.mimeType, bytes, kind: "upload", localPath });
+        savedIds.push(item.id);
+      }
+    } catch (error) {
+      for (const id of savedIds) await prisma.storedFile.deleteMany({ where: { id, userId: user.id } }).catch(() => undefined);
       for (const file of rawFiles) await fs.promises.unlink(path.join(uploads, file.filename)).catch(() => undefined);
       console.error("Could not persist uploaded files.", error);
       return res.status(503).json({ error: "The files could not be safely saved. Please try again." });
