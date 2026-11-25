@@ -336,10 +336,12 @@ function MessageView({
                   : null,
                 a: ({ href, children }) => {
                   if (!href) return <span>{children}</span>;
-                  const isFile = href.startsWith("/api/files/") || href.includes("/api/files/");
-                  if (isFile) {
-                    const fileName = decodeURIComponent(href.split("/").pop()?.split("?")[0] || "Generated document");
-                    return <button className="message-document-card" type="button" onClick={() => setExpandedDocument({ src: href, title: fileName })}>
+                  let fileUrl: URL | null = null;
+                  try { fileUrl = new URL(href, window.location.origin); } catch {}
+                  const isFile = fileUrl?.origin === window.location.origin && fileUrl.pathname.startsWith("/api/files/");
+                  if (isFile && fileUrl) {
+                    const fileName = decodeURIComponent(fileUrl.pathname.split("/").pop() || "Generated document");
+                    return <button className="message-document-card" type="button" onClick={() => setExpandedDocument({ src: fileUrl!.pathname, title: fileName })}>
                       <span className="message-document-icon"><FileText size={21} /></span>
                       <span className="message-document-details"><strong>{fileName}</strong><small>Open document preview</small></span>
                       <Eye size={18} aria-hidden="true" />
