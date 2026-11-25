@@ -145,6 +145,10 @@ export function shouldRejectEphemeralFileStorage(isVercel: boolean, persistentSt
   return isVercel && !persistentStorageIsConfigured;
 }
 
+export function decodeUploadedText(bytes: Buffer) {
+  return bytes.toString("utf8");
+}
+
 function persistentObjectPath(userId: string, kind: string, id: string, name: string) {
   const extension = path.extname(name).toLowerCase().replace(/[^.a-z0-9]/g, "").slice(0, 12);
   return `${userId}/${kind}/${id}${extension}`;
@@ -833,6 +837,7 @@ const researchRateLimit = createCostLimiter(60 * 1000, 10, "Research request lim
 const imageSearchRateLimit = createCostLimiter(60 * 1000, 20, "Image search limit reached. Please wait a minute and try again.");
 const imageGenerationRateLimit = createCostLimiter(15 * 60 * 1000, 5, "Image generation limit reached. Please wait 15 minutes before generating more images.");
 const uploadRateLimit = createCostLimiter(15 * 60 * 1000, 20, "Upload limit reached. Please wait before uploading more files.");
+const fileAnalysisRateLimit = createCostLimiter(15 * 60 * 1000, 12, "File analysis limit reached. Please wait before analyzing more documents.");
 const requirePersistentFileStorage: express.RequestHandler = (_req, res, next) => {
   if (process.env.VERCEL && !persistentStorageConfigured()) {
     return res.status(503).json({ error: "Persistent file storage is not configured. Configure Supabase Storage in Vercel before generating or saving files." });
@@ -1791,15 +1796,13 @@ app.post("/api/upload", uploadRateLimit, upload.array("files", 10), async (req, 
   res.json({ files });
 });
 
-app.post("/api/files/:fileId/analyze", async (req, res) => {
+app.post("/api/files/:fileId/analyze", fileAnalysisRateLimit, async (req, res) => {
   const user = await currentUser(req);
   const fileId = path.basename(req.params.fileId);
   const storedFile = prisma && databaseReady ? await prisma.storedFile.findUnique({ where: { id: fileId } }) : null;
   if (user && (!storedFile || storedFile.userId !== user.id)) return res.status(404).json({ error: "Uploaded file not found." });
   if (!user && storedFile?.userId) return res.status(404).json({ error: "Uploaded file not found." });
   const file = path.join(uploads, fileId);
-  if (user && (!storedFile || storedFile.userId !== user.id)) return res.status(404).json({ error: "Uploaded file not found." });
-  if (!user && storedFile?.userId) return res.status(404).json({ error: "Uploaded file not found." });
   const fileBytes = await readUserFile(storedFile, file);
   if (!fileBytes) return res.status(404).json({ error: "Uploaded file not found." });
   const mimeType = storedFile?.mimeType || String(req.body?.mimeType || "");
@@ -1823,7 +1826,7 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
       }).join("\n\n");
       method = "Spreadsheet text extraction";
     } else if (/\.txt|\.md|\.rtf|\.json|\.csv$/i.test(fileId) || ["text/plain","text/markdown","text/rtf","application/rtf","application/json","text/csv"].includes(mimeType)) {
-      text = fs.readFileSync(file, "utf8");
+      text = decodeUploadedText(fileBytes);
       method = "Text extraction";
     } else if (mimeType.includes("presentationml") || /\.pptx$/i.test(fileId)) {
       text = extractTextFromZipArchive(fileBytes);
@@ -1836,8 +1839,9 @@ app.post("/api/files/:fileId/analyze", async (req, res) => {
     }
     if (!text.trim()) return res.status(422).json({ error: "No readable text was extracted. The document may be scanned or image-based.", method });
     res.json({ text: text.slice(0, 100000), method, truncated: text.length > 100000 });
-  } catch (error: any) {
-    res.status(422).json({ error: error?.message || "File extraction failed.", method: "Extraction" });
+  } catch (error) {
+    console.error("File text extraction failed.", safeErrorCategory(error));
+    res.status(422).json({ error: "The file could not be analyzed. Check that it is a supported, uncorrupted document and try again.", method: "Extraction" });
   }
 });
 
