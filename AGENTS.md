@@ -1,34 +1,39 @@
 # KOPLI AI project workflow
 
-## Project identity
-
-- This repository is the official KOPLI AI project: `krishnamoorthipranesh-bot/kopli-ai`.
-- The deployment branch is `master`; verify the repository's current default branch before changing it.
-- The primary live site is `https://kopli-ai-1.onrender.com`.
-- The primary Render service is `kopli-ai-1`. Check the Render workspace and service before using them.
+## Project identity and production architecture
+- Official repository: `krishnamoorthipranesh-bot/kopli-ai`.
+- Production branch: `master`; verify the current default branch before changes.
+- Production site: https://kopli-ai.vercel.app/
+- Production stack: Vercel (React/Vite frontend + Express serverless API), Supabase PostgreSQL, Prisma, Supabase Storage, Groq, Cloudflare Workers AI, Tavily, and optional Resend.
+- Do not deploy production to Render or add a Render runtime dependency. Legacy `render.yaml` / Docker files may remain only as a rollback archive; do not wake, modify, or deploy them unless explicitly requested.
 - Do not confuse this project with another KOPLI-branded application.
 
-## When the user requests a code or feature update
+## Safe implementation workflow
+1. Inspect current branch, working tree, source, configuration, environment-variable names, and tests before editing.
+2. Preserve existing users, database rows, stored objects, auth sessions, and working features. Never run destructive migrations or data cleanup without explicit approval.
+3. Keep all credentials server-side. Never print, copy into source, commit, or ask the user to paste secrets into chat. If a credential is exposed, recommend rotation.
+4. Implement real behavior; do not add decorative controls, fake provider responses, fake streaming, or placeholder success states.
+5. Run the repository test suite, TypeScript checks, production build, and security review after changes. Report exactly what ran and what did not.
+6. Review the complete diff and verify no secrets or unrelated changes are included.
+7. Use a feature branch and pull request where possible. Merge/deploy only after CI and preview checks pass and the target project/commit are verified.
+8. Verify the resulting Vercel deployment state and production endpoints before reporting success.
 
-1. Inspect the current source, repository status, branch, deployment configuration, and relevant tests before editing.
-2. Modify the existing application. Preserve KOPLI branding, current navigation, authentication, stored data, and working features unless the user asks otherwise.
-3. Keep secrets in server-side environment variables. Never put credentials in source, examples, logs, commits, or chat. If a credential appears in a pasted prompt or code, treat it as exposed and recommend rotation.
-4. Run the repository's test command and production build after code changes. Fix failures and rerun them. Also run `git diff --check`.
-5. Commit the reviewed changes locally after verification.
-6. Recheck GitHub write and push permissions. Push to `master` only when authorized write access is available; do not try to bypass a read-only connection. If blocked, keep the verified local commit and tell the user the exact permission needed.
-7. When a push succeeds, wait for the primary Render service to finish deploying that commit. Verify the deploy status and commit SHA, then check `/health`, `/api/status`, and the live site at the URL above. Report only results observed from those checks.
+## Database and file-storage safety
+- Supabase PostgreSQL is the production database; Prisma schema and migrations are the source of truth.
+- Supabase Storage bucket `kopli-user-files` is private. The service-role key must be server-only.
+- On Vercel, never persist permanent files in `/tmp`. If persistent storage is unavailable, fail closed with a clear 503 rather than reporting a successful upload.
+- Existing records referencing `/tmp` may be unrecoverable after an instance restart; never delete or rewrite their metadata without verifying file bytes and user ownership.
+- Do not add broad RLS policies without understanding the server-side Prisma access model. Review Supabase advisors after any policy/schema changes.
+- Never migrate production data between providers without a verified backup and explicit approval.
 
-## Database and deployment safety
-
-- Preserve the user's selected production database. Do not switch providers, migrate records, delete data, or change production database URLs until the current source of truth and recovery path are verified.
-- Do not apply Render Blueprint changes or production environment changes as a substitute for inspecting their actual effect.
-- Check service branch, Auto-Deploy, current deployment, and required environment variable names before reporting deployment readiness.
-- If a provider integration hides credentials or cannot link a database directly, explain that limitation and provide the supported secure connection path. Do not ask the user to paste a secret into chat.
-- Do not enable paid plans or services without the user's explicit approval.
+## Environment and deployment
+- Check variable names and target environments without decrypting or displaying secret values.
+- Never create fake credentials or overwrite working production variables.
+- Production deploy target is Vercel project `kopli-ai`, domain https://kopli-ai.vercel.app/.
+- Do not enable paid plans or services without explicit approval.
+- If required credentials or permissions are missing, state the exact blocker and continue with all independent work.
 
 ## Reporting
-
-- State separately whether GitHub read, write, commit, and push are available.
-- State Render access, Auto-Deploy, and live verification separately.
-- Distinguish local tests/build from live-provider tests and production checks.
-- Never report a push, deployment, API connection, or live verification without evidence.
+- Distinguish source changes, CI tests, Preview deployment, Production deployment, and live functional tests.
+- Distinguish completed/verified, implemented/unverified, blocked, and not implemented.
+- Never claim a feature, test, integration, or deployment is verified without direct evidence.
