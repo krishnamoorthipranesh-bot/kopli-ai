@@ -480,6 +480,7 @@ function App() {
   const [libraryBusy, setLibraryBusy] = useState(false);
   const [toolType, setToolType] = useState<"image" | "docx" | "pdf" | "pptx" | "xlsx">("image");
   const [toolPrompt, setToolPrompt] = useState("");
+  const [toolEditPrompt, setToolEditPrompt] = useState("");
   const [toolTitle, setToolTitle] = useState("");
   const [toolResult, setToolResult] = useState<ExploreResult | null>(null);
   const [toolPreview, setToolPreview] = useState(false);
@@ -1538,6 +1539,30 @@ function App() {
     } catch (error) { setNotice(errorText(error)); }
   }
 
+  async function editGeneratedImage() {
+    if (!toolResult?.previewUrl || !toolEditPrompt.trim() || toolBusy) return;
+    setToolBusy(true);
+    try {
+      const sourceImage = new Image();
+      sourceImage.src = toolResult.previewUrl;
+      await sourceImage.decode();
+      const scale = Math.min(1, 511 / Math.max(sourceImage.naturalWidth, sourceImage.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(sourceImage.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(sourceImage.naturalHeight * scale));
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("This browser cannot prepare the image for editing.");
+      context.drawImage(sourceImage, 0, 0, canvas.width, canvas.height);
+      const imageData = canvas.toDataURL("image/jpeg", 0.9);
+      const result = await request<{ fileName: string; mimeType: string; imageData: string }>("/api/images/edit", jsonRequest("POST", { prompt: toolEditPrompt, imageData, includePreview: true }), 150000);
+      const previewUrl = "data:" + result.mimeType + ";base64," + result.imageData;
+      setToolResult({ fileName: result.fileName, mimeType: result.mimeType, previewUrl });
+      setImageHistory(previous => [{ prompt: toolEditPrompt, previewUrl, fileName: result.fileName }, ...previous].slice(0, 5));
+      setToolEditPrompt("");
+      setNotice("Image edited successfully.");
+    } catch (error) { setNotice(errorText(error)); }
+    finally { setToolBusy(false); }
+  }
   async function generateContent(event: FormEvent) {
     event.preventDefault();
     if (!toolPrompt.trim() || toolBusy) return;
@@ -1763,6 +1788,18 @@ function App() {
             <div className="explore-form-heading"><div><span className="eyebrow">KOPLI AI TOOL</span><h2>{({image:"Image generation",docx:"Documents",pdf:"PDF reports",pptx:"Presentations",xlsx:"Spreadsheets"})[toolType]}</h2></div>{toolResult && <button type="button" className="explore-text-action" onClick={() => { setToolResult(null); setToolPreview(false); }}>Clear result</button>}</div>
             <form onSubmit={event => void generateContent(event)}>
               {toolType !== "image" && <label className="explore-field"><span>Title <small>(optional)</small></span><input className="chat-search" value={toolTitle} onChange={event => setToolTitle(event.target.value)} maxLength={160} placeholder="Give your file a title" /></label>}
+              {toolType === "image" && <label className="explore-field"><span>Or upload an image to edit</span>
+                <input className="chat-search" type="file" accept="image/png,image/jpeg,image/webp" onChange={event => {
+                  const file = event.currentTarget.files?.[0];
+                  if (!file) return;
+                  if (file.size > 10 * 1024 * 1024) { setNotice("Choose an image smaller than 10 MB."); event.currentTarget.value = ""; return; }
+                  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) { setNotice("Choose a PNG, JPEG, or WebP image."); event.currentTarget.value = ""; return; }
+                  const reader = new FileReader();
+                  reader.onload = () => { if (typeof reader.result === "string") { setToolResult({ fileName: file.name, mimeType: file.type, previewUrl: reader.result }); setToolEditPrompt(""); } };
+                  reader.onerror = () => setNotice("The selected image could not be opened.");
+                  reader.readAsDataURL(file);
+                }} />
+              </label>}
               {toolType === "image" && <div className="explore-image-options">
                 <label className="explore-field"><span>Style</span><select className="chat-search" value={toolStyle} onChange={event => setToolStyle(event.target.value)}><option value="">Automatic</option><option value="photographic">Photographic</option><option value="digital-art">Digital art</option><option value="3d-model">3D</option><option value="cinematic">Cinematic</option><option value="anime">Anime</option><option value="isometric">Isometric</option><option value="line-art">Line art</option></select></label>
                 <label className="explore-field"><span>Aspect ratio</span><select className="chat-search" value={toolAspect} onChange={event => setToolAspect(event.target.value)}>{["1:1","16:9","3:2","4:5","2:3","9:16","21:9","5:4"].map(value => <option key={value}>{value}</option>)}</select></label>
@@ -1775,7 +1812,11 @@ function App() {
             </form>
             {toolBusy && <p className="explore-status" role="status">KOPLI AI is creating your {toolType === "image" ? "image" : toolType === "docx" ? "document draft" : toolType.toUpperCase()}…</p>}
             {toolResult && <div className="generated-image-card explore-result">
-              {toolType === "image" && toolResult.previewUrl && <img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || "AI generated image"} />}
+              {toolType === "image" && toolResult.previewUrl && <>
+                <img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || "AI generated image"} />
+                <label className="explore-field"><span>Edit this image</span><textarea className="chat-search" value={toolEditPrompt} onChange={event => setToolEditPrompt(event.target.value)} maxLength={1500} placeholder="Describe what to change, add, or remove…" /></label>
+                <div className="explore-form-footer"><span>Uses the current image as a reference</span><button type="button" className="auth-submit" onClick={() => void editGeneratedImage()} disabled={!user || toolBusy || !toolEditPrompt.trim()}>{toolBusy ? "Editing…" : "Edit image"}</button></div>
+              </>}
               {toolType === "pdf" && toolResult.previewUrl && <iframe className="explore-pdf-preview" src={toolResult.previewUrl} title={toolResult.fileName} />}
               {toolType === "docx" && toolResult.content !== undefined && <>
                 <div className="explore-result-tabs"><button type="button" className={!toolPreview ? "active" : ""} onClick={() => setToolPreview(false)}>Edit</button><button type="button" className={toolPreview ? "active" : ""} onClick={() => setToolPreview(true)}>Preview</button></div>
