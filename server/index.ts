@@ -27,7 +27,7 @@ import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import bcrypt from "bcryptjs";
 import { containsSensitiveSecret, isPastContextQuery, memoryKeywords } from "./memory-utils.js";
-import { aiConfig, securityConfig } from "./config";
+import { aiConfig, securityConfig } from "./config.js";
 
 const app = express();
 app.set("trust proxy", 1);
