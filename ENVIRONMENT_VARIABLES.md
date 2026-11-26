@@ -13,7 +13,9 @@ This document lists all environment variables utilized by the **KOPLI AI** backe
 | `GROQ_API_KEY` | Optional (Activates live AI) | `gsk_...` | API key from Groq to power high-speed LLM reasoning, code generation, and chat completions. |
 | `GROQ_MODEL` | Optional | `openai/gpt-oss-120b` | Groq model identifier (alternatives: `llama-3.3-70b-versatile`, `mixtral-8x7b-32768`). |
 | `TAVILY_API_KEY` | Optional (Activates live search) | `tvly-...` | API key from Tavily to enable real-time internet search and citation retrieval. |
-| `STABILITY_API_KEY` | Optional (Activates image gen) | `sk-...` | API key from Stability AI to generate Stable Diffusion visual content in Explore mode. |
+| `CLOUDFLARE_ACCOUNT_ID` | Optional (Activates image AI) | Cloudflare account ID | Account used by Workers AI image generation and editing. |
+| `CLOUDFLARE_API_TOKEN` | Optional (Activates image AI) | Server-only token | Workers AI API token. Keep it server-side with Workers AI permissions. |
+| `CLOUDFLARE_IMAGE_EDIT_MODEL` | Optional | `black-forest-labs/flux-1-kontext-pro` | Allowed values: `black-forest-labs/flux-1-kontext-pro` or `black-forest-labs/flux-1-kontext-max`. Kontext Pro is billed at $0.04 per image; Kontext Max is billed at $0.08 per image according to Cloudflare model pricing. |
 | `DATABASE_URL` | Optional (Activates cloud DB) | `postgresql://user:pass@host:5432/db` | PostgreSQL connection string for user accounts, chat persistence, memory, and file metadata. |
 | `SUPABASE_URL` | Required for persistent file storage | `https://project-ref.supabase.co` | Supabase project URL used by the server-side Storage adapter. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Required for persistent file storage | Server-only secret | Server-side Storage access. Never expose this key in frontend code, browser storage, public logs or Git. |
@@ -37,5 +39,5 @@ KOPLI AI is designed with an active fallback layer:
 - If `GROQ_API_KEY` is omitted: The server answers with helpful setup guidance and identifies creator **Pranesh KK**.
 - If `DATABASE_URL` is omitted: Guest conversations persist in browser `localStorage`.
 - If `TAVILY_API_KEY` is omitted: The search endpoint returns an informative 503 notification explaining demo status without crashing.
-- If `STABILITY_API_KEY` is omitted: The image generator returns a friendly notice to configure the key in the backend.
+- If Cloudflare credentials are omitted: image generation and image editing show a friendly provider setup notice. Image editing uses a paid FLUX Kontext model and is subject to Cloudflare billing and account limits.
 - Document creation (Word `.docx`, PowerPoint `.pptx`, PDF reports, Excel `.xlsx`) continues to function using rich built-in academic and professional templates even in demo mode!

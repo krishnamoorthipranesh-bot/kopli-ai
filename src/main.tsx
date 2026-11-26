@@ -6,7 +6,7 @@ import {
   ArrowLeft, Brain, Camera, Check, ChevronDown, ChevronLeft, ChevronRight, Code2,
   Copy, Download, Eye, EyeOff, FileText, Files, Globe2, Image as ImageIcon, Images, Library,
   LogIn, LogOut, Menu, Mic, CircleHelp, MoreHorizontal, Plus, Search, Share2, LockKeyhole, Folder,
-  Send, Settings, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
+  Send, Settings, ShieldCheck, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2,
   UserRound, Volume2, X, Zap
 } from "lucide-react";
 import "./styles.css";
@@ -14,7 +14,7 @@ import "./theme.css";
 import "./chat-theme.css";
 
 type Mode = "fast" | "smart" | "reasoning" | "coding" | "research" | "vision" | "study";
-type Section = "Chat" | "Search" | "Explore" | "Library" | "Settings";
+type Section = "Chat" | "Search" | "Explore" | "Library" | "Settings" | "Admin";
 type Rating = "helpful" | "not_helpful";
 type IconComponent = typeof Sparkles;
 
@@ -270,12 +270,28 @@ function MessageView({
 }) {
   const isUser = message.role === "user";
   const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null);
+  const [imageMenuOpen, setImageMenuOpen] = useState(false);
+  const [imageActionNotice, setImageActionNotice] = useState("");
   useEffect(() => {
     if (!expandedImage) return;
     const closeOnEscape = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setExpandedImage(null); };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [expandedImage]);
+  useEffect(() => { if (!expandedImage) { setImageMenuOpen(false); setImageActionNotice(""); } }, [expandedImage]);
+  async function shareImage() {
+    if (!expandedImage) return;
+    try {
+      if (navigator.share) await navigator.share({ title: expandedImage.alt, url: expandedImage.src });
+      else if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(expandedImage.src); setImageActionNotice("Image link copied"); }
+      else setImageActionNotice("Sharing is not supported on this device");
+    } catch (error) { if (error instanceof Error && error.name !== "AbortError") setImageActionNotice("Could not share this image"); }
+  }
+  async function copyImageLink() {
+    if (!expandedImage) return;
+    try { await navigator.clipboard.writeText(expandedImage.src); setImageMenuOpen(false); setImageActionNotice("Image link copied"); }
+    catch { setImageActionNotice("Could not copy image link"); }
+  }
   async function downloadImage() {
     if (!expandedImage) return;
     try {
@@ -294,16 +310,34 @@ function MessageView({
       window.open(expandedImage.src, "_blank", "noopener,noreferrer");
     }
   }
+  const documentDownload = !isUser
+    ? message.content.match(/\[Download ([^\]]+\.(?:docx|pdf|pptx|xlsx))\]\(([^)]+)\)/i)
+    : null;
+  const visibleMessageContent = documentDownload
+    ? message.content.replace(/\n*\[Download [^\]]+\]\([^)]+\)/, "").trim()
+    : message.content;
+  async function shareDocument() {
+    if (!documentDownload) return;
+    const url = new URL(documentDownload[2], window.location.origin).href;
+    try {
+      if (navigator.share) await navigator.share({ title: documentDownload[1], url });
+      else { await navigator.clipboard.writeText(url); }
+    } catch (error) {
+      if (error instanceof Error && error.name !== "AbortError") {
+        try { await navigator.clipboard.writeText(url); } catch { /* Clipboard may be unavailable. */ }
+      }
+    }
+  }
   return (
     <article className={`message ${message.role}${message.streaming ? " streaming" : ""}`}>
       <div className="message-user-content">
         <div className="message-content">
-          {message.content
+          {visibleMessageContent
             ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
                 img: ({ src, alt }) => src
                   ? <button className="message-image-button" type="button" onClick={() => setExpandedImage({ src, alt: alt || "KOPLI AI image" })} aria-label="Open image full screen"><img src={src} alt={alt || "KOPLI AI image"} loading="lazy" /></button>
                   : null
-              }}>{message.content}</ReactMarkdown>
+              }}>{visibleMessageContent}</ReactMarkdown>
             : <div className="thinking-state" role="status"><span>Thinking</span></div>}
           {message.generationType && message.streaming && <div className="generation-card" role="status" aria-live="polite">
             <div className="generation-card-heading"><span className="generation-card-icon">{message.generationType === "image" ? <ImageIcon size={17} /> : <FileText size={17} />}</span><span>{message.progressLabel || (message.generationType === "image" ? "Creating your image" : "Creating your document")}</span><strong>{message.progress ?? 8}%</strong></div>
@@ -314,6 +348,18 @@ function MessageView({
             {message.sources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">[{index + 1}] {source.title || source.url}</a>)}
           </div>}
         </div>
+{documentDownload && <section className="chat-document-card" aria-label="Generated document">
+          <div className="chat-document-top">
+            <span className="chat-document-icon"><FileText size={21} /></span>
+            <div className="chat-document-meta"><strong>{documentDownload[1]}</strong><span>{documentDownload[1].split(".").pop()?.toUpperCase() || "DOCUMENT"} · KOPLI AI</span></div>
+            <span className="chat-document-ready"><Check size={13} /> Ready</span>
+          </div>
+          <div className="chat-document-actions">
+            <a className="chat-document-download" href={documentDownload[2]} download={documentDownload[1]}><Download size={16} /> Download</a>
+            <a className="chat-document-secondary" href={documentDownload[2]} target="_blank" rel="noreferrer"><Eye size={16} /> Preview</a>
+            <button className="chat-document-secondary" type="button" onClick={() => void shareDocument()}><Share2 size={16} /> Share</button>
+          </div>
+        </section>}
           {!!message.attachments?.length && <div className="message-attachments" aria-label="Message attachments">
             {message.attachments.map((attachment, index) => attachment.previewUrl
               ? <button className="message-image-button" type="button" key={`${attachment.fileName}-${index}`} onClick={() => setExpandedImage({ src: attachment.previewUrl!, alt: attachment.fileName })} aria-label={`Open ${attachment.fileName} full screen`}><img src={attachment.previewUrl} alt={attachment.fileName} /></button>
@@ -328,11 +374,22 @@ function MessageView({
       </div>
       {expandedImage && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="Image preview" onClick={() => setExpandedImage(null)}>
         <div className="image-lightbox-toolbar" onClick={event => event.stopPropagation()}>
-          <span>{expandedImage.alt}</span>
-          <button type="button" onClick={() => void downloadImage()} aria-label="Download image" title="Download"><Download size={19} /></button>
-          <button type="button" onClick={() => setExpandedImage(null)} aria-label="Close image" title="Close"><X size={19} /></button>
+          <button className="image-viewer-icon-button" type="button" onClick={() => setExpandedImage(null)} aria-label="Close image" title="Close"><X size={25} /></button>
+          <div className="image-viewer-spacer" />
+          <div className="image-viewer-more-wrap">
+            <button className="image-viewer-icon-button" type="button" onClick={() => setImageMenuOpen(value => !value)} aria-label="More image options" title="More"><MoreHorizontal size={23} /></button>
+            {imageMenuOpen && <div className="image-viewer-menu">
+              <button type="button" onClick={() => void copyImageLink()}><Copy size={16} />Copy image link</button>
+              <button type="button" onClick={() => setImageActionNotice("Image details: " + expandedImage.alt)}><ImageIcon size={16} />Image details</button>
+            </div>}
+          </div>
+          <button className="image-viewer-icon-button" type="button" onClick={() => void downloadImage()} aria-label="Download image" title="Download"><Download size={22} /></button>
+          <button className="image-viewer-share-button" type="button" onClick={() => void shareImage()}><Share2 size={17} /><span>Share</span></button>
         </div>
-        <img className="image-lightbox-image" src={expandedImage.src} alt={expandedImage.alt} onClick={event => event.stopPropagation()} />
+        <div className="image-lightbox-stage" onClick={event => event.stopPropagation()}>
+          <img className="image-lightbox-image" src={expandedImage.src} alt={expandedImage.alt} />
+        </div>
+        {imageActionNotice && <div className="image-viewer-notice" role="status">{imageActionNotice}</div>}
       </div>}
     </article>
   );
@@ -347,6 +404,7 @@ function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
+  const [pendingVerification, setPendingVerification] = useState(false);
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -403,12 +461,18 @@ function App() {
   const [searchBusy, setSearchBusy] = useState(false);
   const [libraryFiles, setLibraryFiles] = useState<LibraryFile[]>([]);
   const [libraryBusy, setLibraryBusy] = useState(false);
-  const [toolType, setToolType] = useState<"image" | "docx" | "pdf" | "pptx" | "xlsx">("image");
+  const [adminOverview, setAdminOverview] = useState<{ users: number; conversations: number; files: number; storageBytes: number } | null>(null);
+  const [adminUsers, setAdminUsers] = useState<Array<{ id: string; email: string; name: string | null; role: "user" | "owner"; createdAt: string }>>([]);
+  const [adminBusy, setAdminBusy] = useState(false);
+  const [toolType, setToolType] = useState<"image" | "edit" | "docx" | "pdf" | "pptx" | "xlsx">("image");
   const [toolPrompt, setToolPrompt] = useState("");
+  const [toolEditFile, setToolEditFile] = useState<File | null>(null);
+  const [toolEditPreview, setToolEditPreview] = useState("");
   const [toolTitle, setToolTitle] = useState("");
   const [toolResult, setToolResult] = useState<ExploreResult | null>(null);
   const [toolPreview, setToolPreview] = useState(false);
   const [toolStyle, setToolStyle] = useState("");
+  const [toolNegativePrompt, setToolNegativePrompt] = useState("");
   const [toolAspect, setToolAspect] = useState("1:1");
   const [toolImageFormat, setToolImageFormat] = useState("png");
   const [toolProviders, setToolProviders] = useState<{ groq?: boolean; cloudflareAi?: boolean } | null>(null);
@@ -433,11 +497,25 @@ function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const voiceStreamRef = useRef<MediaStream | null>(null);
   const voiceChunksRef = useRef<Blob[]>([]);
+  const voiceAudioContextRef = useRef<AudioContext | null>(null);
+  const voiceAnalyserRef = useRef<AnalyserNode | null>(null);
+  const voiceMeterFrameRef = useRef<number | null>(null);
+  const voiceMeterSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const voiceMeterLastUpdateRef = useRef(0);
+  const [voiceLevel, setVoiceLevel] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const stickToBottomRef = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
   const parallaxFrameRef = useRef<number | null>(null);
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
+
+  useEffect(() => () => {
+    if (voiceMeterFrameRef.current !== null) cancelAnimationFrame(voiceMeterFrameRef.current);
+    voiceStreamRef.current?.getTracks().forEach(track => track.stop());
+    if (voiceAudioContextRef.current && voiceAudioContextRef.current.state !== "closed") {
+      void voiceAudioContextRef.current.close().catch(() => undefined);
+    }
+  }, []);
 
   const currentMode = useMemo(() => modes.find(item => item.id === mode) || modes[1], [mode]);
   const ModeIcon = currentMode.icon;
@@ -505,6 +583,24 @@ function App() {
     } catch {}
     setAuthOpen(true);
   }, [authReady, user]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("verifyToken");
+    if (!token) return;
+    setAuthOpen(true);
+    setAuthStage("account");
+    setRegistering(false);
+    setAuthBusy(true);
+    request<{ message: string }>("/api/auth/verify-email", jsonRequest("POST", { token }))
+      .then(result => {
+        setPendingVerification(false);
+        setAuthMessage(result.message || "Email verified. You can now sign in.");
+        window.history.replaceState({}, "", window.location.pathname);
+      })
+      .catch(error => setAuthError(errorText(error)))
+      .finally(() => setAuthBusy(false));
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1096,8 +1192,25 @@ function App() {
         email: authEmail,
         password: authPassword
       }));
-      if (!result.user) throw new Error("The account service returned an incomplete sign-in response.");
+      if (!result.user) {
+        if (registering && result.message) {
+          setRegistering(false);
+          setPendingVerification(true);
+          setAuthPassword("");
+          setAuthPasswordConfirmation("");
+          setAuthMessage(result.message);
+          try {
+            const delivery = await request<{ message: string }>("/api/auth/resend-verification", jsonRequest("POST", { email: authEmail }));
+            setAuthMessage(delivery.message || "Verification email sent. Check your inbox.");
+          } catch (deliveryError) {
+            setAuthError(errorText(deliveryError));
+          }
+          return;
+        }
+        throw new Error("The account service returned an incomplete sign-in response.");
+      }
       setUser(result.user);
+      setPendingVerification(false);
       try { sessionStorage.removeItem("kopli.auth-choice"); } catch {}
       setActiveId(null);
       setMessages([]);
@@ -1130,6 +1243,20 @@ function App() {
     setAuthPassword("");
     setAuthPasswordConfirmation("");
     setShowAuthPassword(false);
+  }
+
+  async function resendVerificationEmail() {
+    setAuthBusy(true);
+    setAuthError("");
+    setAuthMessage("");
+    try {
+      const result = await request<{ message: string }>("/api/auth/resend-verification", jsonRequest("POST", { email: authEmail }));
+      setAuthMessage(result.message || "If the account needs verification, a link has been sent.");
+    } catch (error) {
+      setAuthError(errorText(error));
+    } finally {
+      setAuthBusy(false);
+    }
   }
 
   async function submitPasswordRecovery(event: FormEvent) {
@@ -1284,6 +1411,59 @@ function App() {
     if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }
 
+  function stopVoiceMeter() {
+    if (voiceMeterFrameRef.current !== null) cancelAnimationFrame(voiceMeterFrameRef.current);
+    voiceMeterFrameRef.current = null;
+    voiceMeterSourceRef.current?.disconnect();
+    voiceMeterSourceRef.current = null;
+    voiceAnalyserRef.current = null;
+    const context = voiceAudioContextRef.current;
+    voiceAudioContextRef.current = null;
+    if (context && context.state !== "closed") void context.close().catch(() => undefined);
+    setVoiceLevel(0);
+  }
+
+  async function startVoiceMeter(stream: MediaStream) {
+    stopVoiceMeter();
+    const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) return;
+    try {
+      const context = new AudioContextConstructor();
+      if (context.state === "suspended") await context.resume();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.72;
+      const source = context.createMediaStreamSource(stream);
+      source.connect(analyser);
+      voiceAudioContextRef.current = context;
+      voiceAnalyserRef.current = analyser;
+      voiceMeterSourceRef.current = source;
+      const samples = new Float32Array(analyser.fftSize);
+      let smoothed = 0;
+      let lastVoiceAt = 0;
+      const update = (now: number) => {
+        if (voiceAnalyserRef.current !== analyser || context.state === "closed") return;
+        analyser.getFloatTimeDomainData(samples);
+        let sum = 0;
+        for (let index = 0; index < samples.length; index += 1) sum += samples[index] * samples[index];
+        const rms = Math.sqrt(sum / samples.length);
+        const isSpeaking = rms > 0.022;
+        if (isSpeaking) lastVoiceAt = now;
+        const target = isSpeaking ? Math.min(1, Math.max(0, (rms - 0.018) * 12)) : (now - lastVoiceAt > 280 ? 0 : smoothed * 0.82);
+        smoothed += (target - smoothed) * (isSpeaking ? 0.38 : 0.2);
+        if (now - voiceMeterLastUpdateRef.current > 45) {
+          voiceMeterLastUpdateRef.current = now;
+          setVoiceLevel(smoothed < 0.015 ? 0 : smoothed);
+        }
+        voiceMeterFrameRef.current = requestAnimationFrame(update);
+      };
+      voiceMeterFrameRef.current = requestAnimationFrame(update);
+    } catch (error) {
+      console.warn("Live microphone waveform is unavailable.", error);
+      stopVoiceMeter();
+    }
+  }
+
   async function startRecorderVoiceFallback() {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setNotice("Voice recording is not supported in this browser. Try Chrome and allow microphone access.");
@@ -1292,6 +1472,7 @@ function App() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       voiceStreamRef.current = stream;
+      await startVoiceMeter(stream);
       voiceChunksRef.current = [];
       const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(type => MediaRecorder.isTypeSupported(type));
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
@@ -1300,12 +1481,14 @@ function App() {
       recorder.onerror = () => {
         setNotice("Microphone recording failed. Check microphone permission and try again.");
         setVoiceActive(false);
+        stopVoiceMeter();
         stream.getTracks().forEach(track => track.stop());
         voiceStreamRef.current = null;
         mediaRecorderRef.current = null;
       };
       recorder.onstop = async () => {
         setVoiceActive(false);
+        stopVoiceMeter();
         stream.getTracks().forEach(track => track.stop());
         voiceStreamRef.current = null;
         mediaRecorderRef.current = null;
@@ -1337,6 +1520,7 @@ function App() {
       recognitionRef.current.stop();
       recognitionRef.current = null;
       setVoiceActive(false);
+      stopVoiceMeter();
       return;
     }
     if (mediaRecorderRef.current?.state === "recording") {
@@ -1370,11 +1554,32 @@ function App() {
       setNotice(`Voice input failed: ${event.error}. If your browser blocks speech recognition, use a supported browser or retry.`);
       setVoiceActive(false);
       recognitionRef.current = null;
+      stopVoiceMeter();
+      voiceStreamRef.current?.getTracks().forEach(track => track.stop());
+      voiceStreamRef.current = null;
     };
-    recognition.onend = () => { setVoiceActive(false); recognitionRef.current = null; };
+    recognition.onend = () => {
+      setVoiceActive(false);
+      recognitionRef.current = null;
+      stopVoiceMeter();
+      voiceStreamRef.current?.getTracks().forEach(track => track.stop());
+      voiceStreamRef.current = null;
+    };
     recognitionRef.current = recognition;
-    try { recognition.start(); setVoiceActive(true); }
-    catch (error) { recognitionRef.current = null; void startRecorderVoiceFallback(); }
+    try {
+      recognition.start();
+      setVoiceActive(true);
+      setNotice("Listening… speak naturally in your selected language.");
+      if (navigator.mediaDevices?.getUserMedia) {
+        void navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+          .then(stream => {
+            if (recognitionRef.current !== recognition) { stream.getTracks().forEach(track => track.stop()); return; }
+            voiceStreamRef.current = stream;
+            void startVoiceMeter(stream);
+          })
+          .catch(error => console.warn("Microphone level visualization permission unavailable.", error));
+      }
+    } catch (error) { recognitionRef.current = null; void startRecorderVoiceFallback(); }
   }
 
   async function runWebSearch(event: FormEvent) {
@@ -1395,6 +1600,19 @@ function App() {
     finally { setLibraryBusy(false); }
   }
 
+  async function loadAdminOverview() {
+    setAdminBusy(true);
+    try {
+      const [overview, accounts] = await Promise.all([
+        request<{ stats: { users: number; conversations: number; files: number; storageBytes: number } }>("/api/admin/overview"),
+        request<{ users: Array<{ id: string; email: string; name: string | null; role: "user" | "owner"; createdAt: string }> }>("/api/admin/users")
+      ]);
+      setAdminOverview(overview.stats);
+      setAdminUsers(accounts.users || []);
+    } catch (error) { setNotice(errorText(error)); }
+    finally { setAdminBusy(false); }
+  }
+
   async function removeLibraryFile(fileName: string) {
     if (!window.confirm(`Delete ${fileName}?`)) return;
     try {
@@ -1406,14 +1624,29 @@ function App() {
   async function generateContent(event: FormEvent) {
     event.preventDefault();
     if (!toolPrompt.trim() || toolBusy) return;
+    if (toolType === "edit" && !toolEditFile) {
+      setNotice("Choose an image before starting the edit.");
+      return;
+    }
     setToolBusy(true);
     setToolResult(null);
     try {
       if (toolType === "image") {
-        const result = await request<{ fileName: string; mimeType: string; imageData: string }>("/api/images/generate", jsonRequest("POST", { prompt: toolPrompt, aspectRatio: toolAspect, stylePreset: toolStyle, outputFormat: toolImageFormat, includePreview: true }));
+        const result = await request<{ fileName: string; mimeType: string; imageData: string }>("/api/images/generate", jsonRequest("POST", { prompt: toolPrompt, negativePrompt: toolNegativePrompt, aspectRatio: toolAspect, stylePreset: toolStyle, outputFormat: toolImageFormat, includePreview: true }));
         const previewUrl = `data:${result.mimeType};base64,${result.imageData}`;
         setToolResult({ fileName: result.fileName, mimeType: result.mimeType, previewUrl });
         setImageHistory(previous => [{ prompt: toolPrompt, previewUrl, fileName: result.fileName }, ...previous.filter(item => item.previewUrl !== previewUrl)].slice(0, 5));
+      } else if (toolType === "edit" && toolEditFile) {
+        const form = new FormData();
+        form.append("image", toolEditFile);
+        form.append("prompt", toolPrompt);
+        const response = await fetch("/api/images/edit", { method: "POST", credentials: "include", body: form });
+        const result = await response.json().catch(() => ({})) as { fileName?: string; mimeType?: string; imageData?: string; error?: string };
+        if (!response.ok || !result.imageData) throw new ApiError(result.error || `Image editing failed (${response.status}).`, response.status);
+        const previewUrl = `data:${result.mimeType || "image/png"};base64,${result.imageData}`;
+        const fileName = result.fileName || "KOPLI_AI_Edited.png";
+        setToolResult({ fileName, mimeType: result.mimeType || "image/png", previewUrl });
+        setImageHistory(previous => [{ prompt: `Edit: ${toolPrompt}`, previewUrl, fileName }, ...previous.filter(item => item.previewUrl !== previewUrl)].slice(0, 5));
       } else if (toolType === "docx") {
         const result = await request<{ title: string; content: string }>("/api/documents/draft", jsonRequest("POST", { prompt: toolPrompt, title: toolTitle || undefined }));
         setToolResult({ title: result.title, content: result.content, fileName: `${result.title}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
@@ -1445,6 +1678,11 @@ function App() {
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) { setNotice(errorText(error)); }
   }
+
+  useEffect(() => {
+    if (section !== "Admin" || user?.role !== "owner") return;
+    void loadAdminOverview();
+  }, [section, user]);
 
   useEffect(() => {
     if (section !== "Explore") return;
@@ -1487,6 +1725,7 @@ function App() {
       {mobileViewport && sidebarOpen && <button className="sidebar-overlay" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`} aria-label="Main navigation">
         <div className="brand"><span className="brand-mark"><img className="hen-image hen-small" src="/logo.png" alt="" /></span><strong>KOPLI <b>AI</b></strong></div>
+        <button className="sidebar-close" type="button" aria-label="Close dashboard navigation" title="Close dashboard" onClick={() => setSidebarOpen(false)}><X size={19} /></button>
         <button className="new-chat" aria-label="New chat" title="New chat" onClick={newChat}><Plus size={18} aria-hidden="true" /><span>New chat</span></button>
         <nav className="nav" aria-label="Workspace">
           {navigation.map(item => {
@@ -1494,6 +1733,7 @@ function App() {
             const label = ({Chat:"AI Assistant",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[item.label];
             return <button key={item.label} className={section === item.label ? "active" : ""} aria-label={label} title={label} aria-current={section === item.label ? "page" : undefined} onClick={() => chooseSection(item.label)}><Icon size={18} aria-hidden="true" /><span>{label}</span></button>;
           })}
+          {user?.role === "owner" && <button className={section === "Admin" ? "active" : ""} aria-label="Admin dashboard" title="Admin dashboard" aria-current={section === "Admin" ? "page" : undefined} onClick={() => chooseSection("Admin")}><ShieldCheck size={18} aria-hidden="true" /><span>Admin dashboard</span></button>}
         </nav>
         <button className="sidebar-about" aria-label="About KOPLI AI" title="About KOPLI AI" onClick={() => { setSection("Settings"); setSettingsDetail("About KOPLI AI"); setSidebarOpen(false); }}><CircleHelp size={17} aria-hidden="true" /><span>About KOPLI AI</span></button>
         <div className="history">
@@ -1514,7 +1754,7 @@ function App() {
 
       <main className="main" data-section={section} data-sidebar-open={sidebarOpen ? "true" : "false"}>
         <div className="chat-floating-controls" aria-label="Chat controls">
-          <button className="icon-button floating-menu-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} title="Menu" onClick={() => { setSidebarOpen(value => !value); setChatActionsOpen(false); setComposerModeOpen(false); setAttachmentMenuOpen(false); setHeaderModeOpen(false); }}><Menu size={20} /></button>
+          {!sidebarOpen && <button className="icon-button floating-menu-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} title="Menu" onClick={() => { setSidebarOpen(value => !value); setChatActionsOpen(false); setComposerModeOpen(false); setAttachmentMenuOpen(false); setHeaderModeOpen(false); }}><Menu size={20} /></button>}
           {!sidebarOpen && <div className="chat-floating-actions">
             {section === "Chat" && <button className="floating-new-chat" type="button" onClick={() => { setChatLocked(false); newChat(); }}><Plus size={17} /><span>New chat</span></button>}
             <div className="chat-actions-wrap">
@@ -1586,7 +1826,7 @@ function App() {
                         return <button key={option.id} type="button" className={mode === option.id ? "selected" : ""} onClick={() => { setMode(option.id); setComposerModeOpen(false); }}><Icon size={16} /><div><strong>{option.label}</strong><span>{option.detail}</span></div></button>;
                       })}</div>}
                     </div>
-                    <button className={`composer-button${voiceActive ? " selected" : ""}`} type="button" aria-label={voiceActive ? "Stop voice input" : "Start voice input"} title="Voice input" onClick={toggleVoice}><Mic size={18} /></button>
+                    <button className={`composer-button${voiceActive ? " selected" : ""}`} type="button" aria-label={voiceActive ? "Stop voice input" : "Start voice input"} title="Voice input" onClick={toggleVoice}><Mic size={18} /></button>{voiceActive && <div className="voice-live-indicator" role="status" aria-live="polite"><span className="voice-live-bars" aria-hidden="true">{Array.from({ length: 17 }, (_, index) => <i key={index} style={{ height: `${4 + voiceLevel * (8 + (index % 5) * 4)}px`, opacity: voiceLevel > 0.025 ? 0.55 + voiceLevel * 0.45 : 0.35 }} />)}</span><span className="voice-live-label">Listening...</span></div>}
                     {streaming
                       ? <button className="send-button" type="button" aria-label="Stop response" onClick={() => abortRef.current?.abort()}><X size={18} /></button>
                       : <button className="send-button" type="submit" disabled={chatLocked || uploadBusy || (!prompt.trim() && !uploadedFiles.length)} aria-label="Send message"><Send size={18} /></button>}
@@ -1611,7 +1851,8 @@ function App() {
           <header className="page-heading"><h1>Explore</h1><p>Create useful content with KOPLI AI tools.</p></header>
           <div className="tool-grid explore-tool-grid">
             {([
-              ["image", ImageIcon, "Image generation", "Create an image from a text description.", "/tools/explore-image.svg"],
+              ["image", ImageIcon, "Image generation", "Create original images from detailed prompts.", "/tools/explore-image.svg"],
+              ["edit", Images, "AI image editor", "Upload a photo and edit it with natural language.", "/tools/explore-image.svg"],
               ["docx", FileText, "Documents", "Draft, edit, preview, and export your document.", "/tools/explore-documents.svg"],
               ["pdf", FileText, "PDF reports", "Generate a polished, printable report.", "/tools/explore-pdf.svg"],
               ["pptx", Library, "Presentations", "Generate a professional slide deck.", "/tools/explore-presentations.svg"],
@@ -1623,36 +1864,94 @@ function App() {
           </div>
           <div className="settings-card modern explore-workspace" aria-label={`${toolType} tool`}>
             {!user && <div className="explore-provider-note"><strong>Sign in to create and download files</strong><span>Generated files are private to your account.</span><button type="button" onClick={() => openAccountAuth()}>Sign in</button></div>}
-            {user && toolProviders && ((toolType === "image" && !toolProviders.cloudflareAi) || (toolType !== "image" && !toolProviders.groq)) && <div className="explore-provider-note" role="status">
-              <strong>{toolType === "image" ? "Image generation needs provider setup" : "AI file generation needs provider setup"}</strong>
-              <span>{toolType === "image" ? "Configure CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in Vercel to enable image generation." : "Configure GROQ_API_KEY in Vercel to enable document generation."}</span>
+            {user && toolProviders && (((toolType === "image" || toolType === "edit") && !toolProviders.cloudflareAi) || ((toolType !== "image" && toolType !== "edit") && !toolProviders.groq)) && <div className="explore-provider-note" role="status">
+              <strong>{toolType === "image" || toolType === "edit" ? "Cloudflare image tools need provider setup" : "AI file generation needs provider setup"}</strong>
+              <span>{toolType === "image" || toolType === "edit" ? "Configure CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in Vercel to enable image AI." : "Configure GROQ_API_KEY in Vercel to enable document generation."}</span>
             </div>}
-            <div className="explore-form-heading"><div><span className="eyebrow">KOPLI AI TOOL</span><h2>{({image:"Image generation",docx:"Documents",pdf:"PDF reports",pptx:"Presentations",xlsx:"Spreadsheets"})[toolType]}</h2></div>{toolResult && <button type="button" className="explore-text-action" onClick={() => { setToolResult(null); setToolPreview(false); }}>Clear result</button>}</div>
+            <div className="explore-form-heading"><div><span className="eyebrow">KOPLI AI TOOL</span><h2>{({image:"Image generation",edit:"AI image editor",docx:"Documents",pdf:"PDF reports",pptx:"Presentations",xlsx:"Spreadsheets"})[toolType]}</h2></div>{toolResult && <button type="button" className="explore-text-action" onClick={() => { setToolResult(null); setToolPreview(false); }}>Clear result</button>}</div>
             <form onSubmit={event => void generateContent(event)}>
-              {toolType !== "image" && <label className="explore-field"><span>Title <small>(optional)</small></span><input className="chat-search" value={toolTitle} onChange={event => setToolTitle(event.target.value)} maxLength={160} placeholder="Give your file a title" /></label>}
+              {toolType !== "image" && toolType !== "edit" && <label className="explore-field"><span>Title <small>(optional)</small></span><input className="chat-search" value={toolTitle} onChange={event => setToolTitle(event.target.value)} maxLength={160} placeholder="Give your file a title" /></label>}
               {toolType === "image" && <div className="explore-image-options">
-                <label className="explore-field"><span>Style</span><select className="chat-search" value={toolStyle} onChange={event => setToolStyle(event.target.value)}><option value="">Automatic</option><option value="photographic">Photographic</option><option value="digital-art">Digital art</option><option value="3d-model">3D</option><option value="cinematic">Cinematic</option><option value="anime">Anime</option><option value="isometric">Isometric</option><option value="line-art">Line art</option></select></label>
+                <label className="explore-field"><span>Style</span><select className="chat-search" value={toolStyle} onChange={event => setToolStyle(event.target.value)}><option value="">Automatic</option><option value="enhance">Enhanced</option><option value="photographic">Photographic</option><option value="digital-art">Digital art</option><option value="cinematic">Cinematic</option><option value="anime">Anime</option><option value="fantasy-art">Fantasy art</option><option value="comic-book">Comic book</option><option value="3d-model">3D render</option><option value="isometric">Isometric</option><option value="line-art">Line art</option><option value="analog-film">Analog film</option><option value="neon-punk">Neon punk</option><option value="low-poly">Low poly</option><option value="origami">Origami</option><option value="modeling-compound">Clay art</option><option value="pixel-art">Pixel art</option><option value="tile-texture">Tile texture</option></select></label>
                 <label className="explore-field"><span>Aspect ratio</span><select className="chat-search" value={toolAspect} onChange={event => setToolAspect(event.target.value)}>{["1:1","16:9","3:2","4:5","2:3","9:16","21:9","5:4"].map(value => <option key={value}>{value}</option>)}</select></label>
                 <label className="explore-field"><span>File type</span><select className="chat-search" value={toolImageFormat} onChange={event => setToolImageFormat(event.target.value)}><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></label>
               </div>}
-              <label className="explore-field" htmlFor="tool-prompt"><span>{toolType === "image" ? "Describe the image" : "What should KOPLI AI create?"}</span>
-                <textarea id="tool-prompt" className="chat-search" value={toolPrompt} onChange={event => setToolPrompt(event.target.value)} maxLength={10000} placeholder={toolType === "image" ? "Describe the subject, composition, lighting, and mood…" : "Describe the content, audience, key points, and any details to include…"} />
+              {toolType === "image" && <label className="explore-field"><span>Negative prompt <small>(optional · things to avoid)</small></span><input className="chat-search" value={toolNegativePrompt} onChange={event => setToolNegativePrompt(event.target.value)} maxLength={500} placeholder="blurry, extra fingers, text, watermark…" /></label>}
+              {toolType === "edit" && <div className="explore-field">
+                <span>Upload image <small>(PNG, JPEG, or WebP · max 3 MB)</small></span>
+                <input className="chat-search" type="file" accept="image/png,image/jpeg,image/webp" onChange={event => {
+                  const file = event.currentTarget.files?.[0];
+                  if (!file) { setToolEditFile(null); setToolEditPreview(""); return; }
+                  if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 3 * 1024 * 1024) {
+                    setNotice("Choose a PNG, JPEG, or WebP image smaller than 3 MB.");
+                    event.currentTarget.value = "";
+                    setToolEditFile(null);
+                    setToolEditPreview("");
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onload = () => setToolEditPreview(String(reader.result || ""));
+                  reader.onerror = () => setNotice("The selected image could not be previewed.");
+                  reader.readAsDataURL(file);
+                  setToolEditFile(file);
+                  setToolResult(null);
+                }} />
+                {toolEditPreview && <img className="generated-image-preview" src={toolEditPreview} alt="Selected image to edit" />}
+                <small>Cloudflare FLUX Kontext Pro costs about $0.04 per image. Each successful edit may be billed to your Cloudflare account; check your usage limits before editing.</small>
+              </div>}
+              <label className="explore-field" htmlFor="tool-prompt"><span>{toolType === "image" ? "Describe the image" : toolType === "edit" ? "How should KOPLI AI edit it?" : "What should KOPLI AI create?"}</span>
+                <textarea id="tool-prompt" className="chat-search" value={toolPrompt} onChange={event => setToolPrompt(event.target.value)} maxLength={toolType === "edit" ? 1600 : 10000} placeholder={toolType === "image" ? "Describe the subject, composition, lighting, and mood…" : toolType === "edit" ? "Example: remove the background, change the sky to sunset, keep the person unchanged…" : "Describe the content, audience, key points, and any details to include…"} />
               </label>
-              <div className="explore-form-footer"><span>{toolPrompt.length.toLocaleString()} / 10,000</span><button className="auth-submit" type="submit" disabled={!user || toolBusy || !toolPrompt.trim() || (toolProviders ? toolType === "image" ? !toolProviders.cloudflareAi : !toolProviders.groq : false)}>{toolBusy ? "Creating…" : toolType === "image" && toolResult ? "Regenerate image" : `Create ${toolType.toUpperCase()}`}</button></div>
+              <div className="explore-form-footer"><span>{toolPrompt.length.toLocaleString()} / {toolType === "edit" ? "1,600" : "10,000"}</span><button className="auth-submit" type="submit" disabled={!user || toolBusy || !toolPrompt.trim() || (toolType === "edit" && !toolEditFile) || (toolProviders ? (toolType === "image" || toolType === "edit") ? !toolProviders.cloudflareAi : !toolProviders.groq : false)}>{toolBusy ? (toolType === "edit" ? "Editing…" : "Creating…") : toolType === "edit" ? "Edit image" : toolType === "image" && toolResult ? "Regenerate image" : `Create ${toolType.toUpperCase()}`}</button></div>
             </form>
-            {toolBusy && <p className="explore-status" role="status">KOPLI AI is creating your {toolType === "image" ? "image" : toolType === "docx" ? "document draft" : toolType.toUpperCase()}…</p>}
+            {toolBusy && <p className="explore-status" role="status">KOPLI AI is {toolType === "edit" ? "editing your image" : `creating your ${toolType === "image" ? "image" : toolType === "docx" ? "document draft" : toolType.toUpperCase()}`}…</p>}
             {toolResult && <div className="generated-image-card explore-result">
-              {toolType === "image" && toolResult.previewUrl && <img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || "AI generated image"} />}
+              {toolType === "edit" && toolResult.previewUrl ? <div className="image-edit-comparison"><figure><figcaption>Original</figcaption><img className="generated-image-preview" src={toolEditPreview} alt="Original uploaded image" /></figure><figure><figcaption>AI edited</figcaption><img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || "AI edited image"} /></figure></div> : toolType === "image" && toolResult.previewUrl ? <img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || "AI generated image"} /> : null}
               {toolType === "pdf" && toolResult.previewUrl && <iframe className="explore-pdf-preview" src={toolResult.previewUrl} title={toolResult.fileName} />}
               {toolType === "docx" && toolResult.content !== undefined && <>
                 <div className="explore-result-tabs"><button type="button" className={!toolPreview ? "active" : ""} onClick={() => setToolPreview(false)}>Edit</button><button type="button" className={toolPreview ? "active" : ""} onClick={() => setToolPreview(true)}>Preview</button></div>
                 {toolPreview ? <div className="explore-document-preview"><ReactMarkdown remarkPlugins={[remarkGfm]}>{toolResult.content}</ReactMarkdown></div> : <textarea aria-label="Edit document content" className="explore-document-editor" value={toolResult.content} onChange={event => setToolResult(previous => previous ? { ...previous, content: event.target.value } : previous)} />}
                 <div className="explore-export-actions">{(["docx","pdf","txt"] as const).map(format => <button key={format} type="button" onClick={() => void exportDocument(format)}><Download size={15} /> Download {format.toUpperCase()}</button>)}<button type="button" onClick={() => void copyText(toolResult.content || "")}><Copy size={15} /> Copy</button></div>
               </>}
-              <div className="generated-image-toolbar"><span>{toolResult.fileName}</span><div>{toolType !== "docx" && toolResult.previewUrl && <a href={toolResult.previewUrl} download={toolResult.fileName} aria-label="Download generated file"><Download size={17} /> Download</a>}</div></div>
+              <div className="generated-image-toolbar"><span>{toolResult.fileName}</span><div>{toolType === "edit" && toolResult.previewUrl && <button type="button" className="explore-text-action" onClick={async () => {
+                try {
+                  const response = await fetch(toolResult.previewUrl!);
+                  const blob = await response.blob();
+                  const nextFile = new File([blob], toolResult.fileName || "KOPLI_AI_Edit.png", { type: toolResult.mimeType || "image/png" });
+                  setToolEditFile(nextFile);
+                  setToolEditPreview(toolResult.previewUrl!);
+                  setToolPrompt("");
+                  setToolResult(null);
+                } catch { setNotice("Could not prepare the edited image for another edit."); }
+              }}>Use as next edit</button>}{toolType !== "docx" && toolResult.previewUrl && <a href={toolResult.previewUrl} download={toolResult.fileName} aria-label="Download generated file"><Download size={17} /> Download</a>}</div></div>
             </div>}
             {toolType === "image" && imageHistory.length > 0 && <div className="explore-history"><strong>Recent images</strong><div>{imageHistory.map(item => <button key={item.fileName} type="button" title={item.prompt} onClick={() => { setToolResult({ fileName: item.fileName, previewUrl: item.previewUrl }); setToolPrompt(item.prompt); }}><img src={item.previewUrl} alt="" /><span>{item.prompt}</span></button>)}</div></div>}
           </div>
+        </section>}
+
+        {section === "Admin" && <section className="page">
+          <header className="page-heading"><h1>Admin dashboard</h1><p>Monitor KOPLI AI accounts, activity, and private file storage.</p></header>
+          {adminBusy && <p className="explore-status" role="status">Loading admin overview…</p>}
+          {adminOverview && <div className="admin-stat-grid">
+            <div className="settings-card modern admin-stat"><span>Total users</span><strong>{adminOverview.users.toLocaleString()}</strong></div>
+            <div className="settings-card modern admin-stat"><span>Conversations</span><strong>{adminOverview.conversations.toLocaleString()}</strong></div>
+            <div className="settings-card modern admin-stat"><span>Stored files</span><strong>{adminOverview.files.toLocaleString()}</strong></div>
+            <div className="settings-card modern admin-stat"><span>Storage used</span><strong>{(adminOverview.storageBytes / (1024 * 1024)).toFixed(1)} MB</strong></div>
+          </div>}
+          <div className="settings-card modern admin-users-card">
+            <div className="explore-form-heading"><div><span className="eyebrow">ACCOUNT MANAGEMENT</span><h2>Recent accounts</h2></div><button type="button" className="explore-text-action" onClick={() => void loadAdminOverview()}>Refresh</button></div>
+            {adminUsers.length ? <div className="admin-user-list">{adminUsers.map(account => <div className="admin-user-row" key={account.id}>
+              <div><strong>{account.name || account.email}</strong><span>{account.email}</span></div>
+              <select aria-label={`Role for ${account.email}`} value={account.role} disabled={account.email === user?.email} onChange={async event => {
+                const role = event.target.value as "user" | "owner";
+                try {
+                  await request(`/api/admin/users/${encodeURIComponent(account.id)}`, jsonRequest("PATCH", { role }));
+                  setAdminUsers(previous => previous.map(item => item.id === account.id ? { ...item, role } : item));
+                } catch (error) { setNotice(errorText(error)); }
+              }}><option value="user">User</option><option value="owner">Owner</option></select>
+            </div>)}</div> : !adminBusy && <p className="empty-history">No accounts found.</p>}
+          </div>
+          <p className="explore-status">Billing, subscriptions, and paid usage controls are not connected yet; no charges or plans are changed from this dashboard.</p>
         </section>}
 
         {section === "Library" && <section className="page">
@@ -1710,7 +2009,7 @@ function App() {
           <button className="dialog-close" aria-label="Close sign in" onClick={closeAuthDialog}><X size={19} /></button>
           <div className="auth-brand">KOPLI <span>AI</span></div>
           <h1 id="auth-title">{authStage === "forgot" ? "Reset your password" : authStage === "reset" ? "Create new password" : registering ? "Create your account" : "Welcome back"}</h1>
-          <p>{authStage === "forgot" ? "Enter your account email. The secure recovery link opens the new-password form directly." : authStage === "reset" ? "Choose a new password for your account." : registering ? "Create an account to sync conversations and files. No email verification is required." : "Sign in to your KOPLI AI account, or continue as a guest."}</p>
+          <p>{authStage === "forgot" ? "Enter your account email. The secure recovery link opens the new-password form directly." : authStage === "reset" ? "Choose a new password for your account." : registering ? "Create an account to sync conversations and files. Verify your email address before signing in." : "Sign in to your KOPLI AI account, or continue as a guest."}</p>
           {authStage === "account" && <form onSubmit={event => void submitAuth(event)}>
             {registering && <label>Name<input autoComplete="name" value={authName} onChange={event => setAuthName(event.target.value)} required maxLength={100} /></label>}
             <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
@@ -1718,6 +2017,7 @@ function App() {
             {registering && <label>Confirm password<input type={showAuthPassword ? "text" : "password"} autoComplete="new-password" value={authPasswordConfirmation} onChange={event => setAuthPasswordConfirmation(event.target.value)} required minLength={12} /></label>}
             {authError && <p className="auth-error" role="alert">{authError}</p>}
             {authMessage && <p className="auth-success" role="status">{authMessage}</p>}
+            {pendingVerification && <button className="auth-mode-toggle" type="button" onClick={() => void resendVerificationEmail()} disabled={authBusy}>Resend verification email</button>}
             <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Please wait…" : registering ? "Create account" : "Sign in"}</button>
           </form>}
           {authStage === "forgot" && <form onSubmit={event => void submitPasswordRecovery(event)}>

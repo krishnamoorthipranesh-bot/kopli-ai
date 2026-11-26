@@ -93,6 +93,9 @@ const uploads = path.join(storage, "uploads");
 for (const dir of [storage, generated, uploads]) fs.mkdirSync(dir, { recursive: true });
 const storageBucket = process.env.SUPABASE_STORAGE_BUCKET?.trim() || "kopli-user-files";
 const persistentStorageConfigured = () => configured(process.env.SUPABASE_URL) && configured(process.env.SUPABASE_SERVICE_ROLE_KEY);
+export function shouldRejectEphemeralFileStorage(isVercel: boolean, persistentStorageIsConfigured: boolean) {
+  return isVercel && !persistentStorageIsConfigured;
+}
 function storageObjectUrl(objectPath: string) {
   const base = process.env.SUPABASE_URL?.trim().replace(/\/+$/, "");
   if (!base || !persistentStorageConfigured()) throw new Error("Persistent file storage is not configured.");
@@ -144,6 +147,9 @@ function persistentObjectPath(userId: string, kind: string, id: string, name: st
 }
 async function saveUserFile(args: { id: string; userId: string; name: string; mimeType: string; bytes: Buffer; kind: string; localPath: string }) {
   if (!prisma) throw new Error("File metadata database is unavailable.");
+  if (shouldRejectEphemeralFileStorage(Boolean(process.env.VERCEL), persistentStorageConfigured())) {
+    throw new Error("Persistent file storage is not configured. Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel before saving files.");
+  }
   let storedPath = args.localPath;
   if (process.env.VERCEL && persistentStorageConfigured()) {
     const objectPath = persistentObjectPath(args.userId, args.kind, args.id, args.name);
@@ -473,12 +479,27 @@ const voiceUpload = multer({
   }
 });
 
+const imageEditUpload = multer({
+  dest: uploads,
+  limits: { fileSize: 3 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    callback(null, ["image/png", "image/jpeg", "image/webp"].includes(file.mimetype));
+  }
+});
+
 app.post("/api/voice/transcribe", rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 20,
   standardHeaders: "draft-7",
   legacyHeaders: false
-}), voiceUpload.single("audio"), async (req, res) => {
+}), async (req, res, next) => {
+  try {
+    if (!await currentUser(req)) return res.status(401).json({ error: "Sign in to use voice transcription." });
+    return next();
+  } catch {
+    return res.status(503).json({ error: "Account verification is temporarily unavailable. Please try again." });
+  }
+}, voiceUpload.single("audio"), async (req, res) => {
   const audioPath = req.file?.path;
   if (!audioPath) return res.status(400).json({ error: "Record a voice message before transcribing." });
   try {
@@ -838,11 +859,12 @@ app.post("/api/auth/register", authRateLimit, async (req, res) => {
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(409).json({ error: "An account with this email already exists." });
     const passwordHash = await bcrypt.hash(password, 12);
-    const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
-    const role = ownerEmail && email === ownerEmail ? "owner" : "user";
-    const user = await prisma.user.create({ data: { email, name, passwordHash, role, emailVerified: true } });
-    await createSession(user.id, req, res);
-    res.status(201).json({ user: { email: user.email, name: user.name, role } });
+    // New accounts must prove control of their email address before they can sign in.
+    // Owner privileges are granted only after the configured owner email is verified.
+    const user = await prisma.user.create({
+      data: { email, name, passwordHash, role: "user", emailVerified: false }
+    });
+    res.status(201).json({ message: "Account created. Verify your email address before signing in." });
   } catch (error) {
     console.error("Account registration failed:", error);
     if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
@@ -861,9 +883,12 @@ app.post("/api/auth/login", authRateLimit, async (req, res) => {
     if (!user?.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
       return res.status(401).json({ error: "Invalid email or password." });
     }
-    const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
-    const role: "user" | "owner" = ownerEmail && user.email === ownerEmail ? "owner" : "user";
-    if (user.role !== role) await prisma.user.update({ where: { id: user.id }, data: { role } });
+    if (!user.emailVerified) {
+      return res.status(403).json({ error: "Please verify your email address before signing in. Use the resend verification option if you need a new link." });
+    }
+    // Never promote an account during login. Owner privileges are assigned only
+    // by the one-time email-verification flow or an authenticated administrator.
+    const role: "user" | "owner" = user.role === "owner" ? "owner" : "user";
     await createSession(user.id, req, res);
     res.json({ user: { email: user.email, name: user.name, role } });
   } catch (error) {
@@ -914,7 +939,11 @@ app.post("/api/auth/verify-email", authRateLimit, async (req, res) => {
       data: { usedAt: verifiedAt }
     });
     if (!consumed.count) throw new Error("Verification link was already used or expired.");
-    await tx.user.update({ where: { id: verification.userId }, data: { emailVerified: true } });
+    const verifiedUser = await tx.user.findUnique({ where: { id: verification.userId }, select: { email: true } });
+    if (!verifiedUser) throw new Error("The account for this verification link no longer exists.");
+    const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
+    const role = ownerEmail && verifiedUser.email.toLowerCase() === ownerEmail ? "owner" : "user";
+    await tx.user.update({ where: { id: verification.userId }, data: { emailVerified: true, role } });
     await tx.emailVerificationToken.deleteMany({ where: { userId: verification.userId, id: { not: verification.id } } });
   });
   res.json({ message: "Email verified. You can now sign in to KOPLI AI." });
@@ -981,6 +1010,37 @@ app.post("/api/auth/reset-password", authRateLimit, async (req, res) => {
     prisma.passwordResetToken.deleteMany({ where: { userId: resetToken.userId, id: { not: resetToken.id } } })
   ]);
   res.json({ message: "Your password was updated. Sign in with your new password." });
+});
+
+app.get("/api/admin/overview", async (req, res) => {
+  const sessionUser = await currentUser(req);
+  if (!sessionUser || sessionUser.role !== "owner") return res.status(403).json({ error: "Admin access is restricted." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: "The admin dashboard requires the database to be ready." });
+  try {
+    const [users, conversations, files, storage, recentUsers] = await Promise.all([
+      prisma.user.count(),
+      prisma.conversation.count(),
+      prisma.storedFile.count(),
+      prisma.storedFile.aggregate({ _sum: { size: true } }),
+      prisma.user.findMany({
+        take: 8,
+        orderBy: { createdAt: "desc" },
+        select: { id: true, email: true, name: true, role: true, createdAt: true }
+      })
+    ]);
+    return res.json({
+      stats: {
+        users,
+        conversations,
+        files,
+        storageBytes: storage._sum.size || 0
+      },
+      recentUsers
+    });
+  } catch (error) {
+    console.error("Admin overview query failed.", error);
+    return res.status(503).json({ error: "Admin statistics are temporarily unavailable." });
+  }
 });
 
 app.get("/api/admin/users", async (req, res) => {
@@ -1574,6 +1634,8 @@ app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
   const stylePreset = String(req.body?.stylePreset || "");
   const allowedStylePresets = new Set(["", "enhance", "anime", "photographic", "digital-art", "comic-book", "fantasy-art", "line-art", "analog-film", "neon-punk", "isometric", "low-poly", "origami", "modeling-compound", "cinematic", "3d-model", "pixel-art", "tile-texture"]);
   if (!allowedStylePresets.has(stylePreset)) return res.status(400).json({ error: "Choose a supported image style." });
+  const negativePrompt = String(req.body?.negativePrompt || "").trim();
+  if (negativePrompt.length > 500) return res.status(400).json({ error: "Negative prompts must be 500 characters or fewer." });
 
   const styleDescriptions: Record<string, string> = {
     anime: "anime illustration",
@@ -1620,7 +1682,7 @@ app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
       console.error("Image prompt enhancement failed; using the original prompt.", error);
     }
   }
-  const finalPrompt = [enhancedPrompt, styleDescriptions[stylePreset] || "", ratioDescription[aspectRatio] || ""].filter(Boolean).join(", ").slice(0, 2048);
+  const finalPrompt = [enhancedPrompt, styleDescriptions[stylePreset] || "", ratioDescription[aspectRatio] || "", negativePrompt ? `Avoid these elements: ${negativePrompt}` : ""].filter(Boolean).join(", ").slice(0, 2048);
   let response: Response;
   try {
     response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
@@ -1679,6 +1741,95 @@ app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
     fileName: `KOPLI_AI_${id.slice(0, 8)}.${actualFormat}`,
     ...(req.body?.includePreview === true ? { imageData: buffer.toString("base64") } : {})
   });
+});
+
+app.post("/api/images/edit", imageGenerationRateLimit, imageEditUpload.single("image"), async (req, res) => {
+  const uploadedPath = req.file?.path;
+  try {
+    const user = await currentUser(req);
+    if (!user) return res.status(401).json({ error: "Sign in to edit images." });
+    const prompt = String(req.body?.prompt || "").trim();
+    if (!prompt) return res.status(400).json({ error: "Describe how you want to edit the image." });
+    if (prompt.length > 1600) return res.status(400).json({ error: "Image editing instructions must be 1,600 characters or fewer." });
+    if (!req.file || !uploadedPath) return res.status(400).json({ error: "Choose a PNG, JPEG, or WebP image to edit." });
+    if (!["image/png", "image/jpeg", "image/webp"].includes(req.file.mimetype)) {
+      return res.status(415).json({ error: "Only PNG, JPEG, and WebP images are supported." });
+    }
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim() || "";
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN?.trim() || "";
+    if (!configured(accountId) || !configured(apiToken)) {
+      return res.status(503).json({ error: "Cloudflare Workers AI is not configured on the server." });
+    }
+    const inputBytes = await fs.promises.readFile(uploadedPath);
+    if (!hasValidFileSignatureBytes(inputBytes, req.file.mimetype)) {
+      return res.status(422).json({ error: "The uploaded image failed file-integrity validation." });
+    }
+    const model = process.env.CLOUDFLARE_IMAGE_EDIT_MODEL?.trim() || "black-forest-labs/flux-1-kontext-pro";
+    const allowedModels = new Set(["black-forest-labs/flux-1-kontext-pro", "black-forest-labs/flux-1-kontext-max"]);
+    if (!allowedModels.has(model)) return res.status(400).json({ error: "The configured Cloudflare image-edit model is not supported." });
+    let response: Response;
+    try {
+      response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model, input: { prompt, input_image: inputBytes.toString("base64"), output_format: "png" } }),
+        signal: AbortSignal.timeout(120000)
+      });
+    } catch (error) {
+      console.error("Cloudflare image editing request failed.", error);
+      return res.status(502).json({ error: "Image editing could not reach Cloudflare. Please try again." });
+    }
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => "")).slice(0, 300);
+      console.error("Cloudflare image-edit model returned HTTP", response.status, detail);
+      return res.status(response.status >= 500 ? 502 : response.status).json({
+        error: response.status === 401 || response.status === 403
+          ? "Cloudflare rejected the Workers AI token. Check its Workers AI permissions."
+          : response.status === 429
+            ? "Cloudflare Workers AI is temporarily rate limited. Please try again later."
+            : `Cloudflare image editing failed (HTTP ${response.status}).`
+      });
+    }
+    const payload: any = await response.json().catch(() => null);
+    let outputBytes: Buffer | null = null;
+    const imageResult = payload?.result?.image || payload?.image;
+    if (typeof imageResult === "string" && imageResult.startsWith("data:image/")) {
+      outputBytes = Buffer.from(imageResult.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, ""), "base64");
+    } else if (typeof imageResult === "string" && /^https:\/\//i.test(imageResult)) {
+      const outputUrl = new URL(imageResult);
+      if (!outputUrl.hostname.endsWith(".aig.cloudflare.com")) {
+        return res.status(502).json({ error: "Cloudflare returned an untrusted image URL." });
+      }
+      const imageResponse = await fetch(outputUrl, { redirect: "error", signal: AbortSignal.timeout(30000) });
+      if (!imageResponse.ok) return res.status(502).json({ error: "The edited image could not be downloaded from Cloudflare." });
+      const contentType = imageResponse.headers.get("content-type") || "";
+      if (!["image/png", "image/jpeg", "image/webp"].includes(contentType.split(";")[0])) {
+        return res.status(502).json({ error: "Cloudflare returned an unsupported image format." });
+      }
+      const contentLength = Number(imageResponse.headers.get("content-length") || 0);
+      if (contentLength > 3 * 1024 * 1024) return res.status(502).json({ error: "The edited image is larger than the supported 3 MB output limit." });
+      const outputBuffer = Buffer.from(await imageResponse.arrayBuffer());
+      if (outputBuffer.length > 3 * 1024 * 1024) return res.status(502).json({ error: "The edited image is larger than the supported 16 MB output limit." });
+      outputBytes = outputBuffer;
+    } else if (typeof imageResult === "string") {
+      outputBytes = Buffer.from(imageResult, "base64");
+    }
+    if (outputBytes && outputBytes.length > 3 * 1024 * 1024) return res.status(502).json({ error: "The edited image is larger than the supported 3 MB output limit." });
+    if (!outputBytes || !hasValidFileSignatureBytes(outputBytes, "image/png")) {
+      return res.status(502).json({ error: "Cloudflare did not return a valid PNG image." });
+    }
+    const id = crypto.randomUUID();
+    const fileName = `KOPLI_AI_EDIT_${id.slice(0, 8)}.png`;
+    const localPath = path.join(generated, `${id}.png`);
+    await fs.promises.writeFile(localPath, outputBytes);
+    await saveUserFile({ id, userId: user.id, name: fileName, mimeType: "image/png", bytes: outputBytes, kind: "image", localPath });
+    return res.json({ id, url: `/api/images/${id}`, fileName, mimeType: "image/png", imageData: outputBytes.toString("base64") });
+  } catch (error) {
+    console.error("Image editing failed.", error);
+    return res.status(502).json({ error: "The image could not be edited. Please try again." });
+  } finally {
+    if (uploadedPath) await fs.promises.unlink(uploadedPath).catch(() => undefined);
+  }
 });
 
 app.get("/api/images/:imageId", async (req, res) => {
@@ -2187,12 +2338,15 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
   res.status(status >= 400 && status < 600 ? status : 500).json({ error: status === 413 ? "The request is too large." : "The request could not be completed." });
 });
 
-app.get(["/health", "/api/health"], (_req, res) => {
-  const ready = databaseStatus === "ready";
-  const fileStorageReady = !process.env.VERCEL || persistentStorageConfigured();
-  const status = ready && fileStorageReady ? "ok" : "degraded";
+app.get("/health", (_req, res) => res.status(200).json({ status: "ok", live: true }));
+
+// Readiness requires both a live database connection and durable file storage.
+app.get("/api/health", (_req, res) => {
+  const databaseReadyNow = databaseStatus === "ready";
+  const fileStorageReady = !shouldRejectEphemeralFileStorage(Boolean(process.env.VERCEL), persistentStorageConfigured());
+  const ready = databaseReadyNow && fileStorageReady;
   return res.status(ready ? 200 : 503).json({
-    status,
+    status: ready ? "ok" : "degraded",
     ready,
     persistence: databaseStatus,
     fileStorage: fileStorageReady ? "persistent" : "temporary",
