@@ -270,12 +270,28 @@ function MessageView({
 }) {
   const isUser = message.role === "user";
   const [expandedImage, setExpandedImage] = useState<{ src: string; alt: string } | null>(null);
+  const [imageMenuOpen, setImageMenuOpen] = useState(false);
+  const [imageActionNotice, setImageActionNotice] = useState("");
   useEffect(() => {
     if (!expandedImage) return;
     const closeOnEscape = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setExpandedImage(null); };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [expandedImage]);
+  useEffect(() => { if (!expandedImage) { setImageMenuOpen(false); setImageActionNotice(""); } }, [expandedImage]);
+  async function shareImage() {
+    if (!expandedImage) return;
+    try {
+      if (navigator.share) await navigator.share({ title: expandedImage.alt, url: expandedImage.src });
+      else if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(expandedImage.src); setImageActionNotice("Image link copied"); }
+      else setImageActionNotice("Sharing is not supported on this device");
+    } catch (error) { if (error instanceof Error && error.name !== "AbortError") setImageActionNotice("Could not share this image"); }
+  }
+  async function copyImageLink() {
+    if (!expandedImage) return;
+    try { await navigator.clipboard.writeText(expandedImage.src); setImageMenuOpen(false); setImageActionNotice("Image link copied"); }
+    catch { setImageActionNotice("Could not copy image link"); }
+  }
   async function downloadImage() {
     if (!expandedImage) return;
     try {
@@ -294,16 +310,34 @@ function MessageView({
       window.open(expandedImage.src, "_blank", "noopener,noreferrer");
     }
   }
+  const documentDownload = !isUser
+    ? message.content.match(/\[Download ([^\]]+\.(?:docx|pdf|pptx|xlsx))\]\(([^)]+)\)/i)
+    : null;
+  const visibleMessageContent = documentDownload
+    ? message.content.replace(/\n*\[Download [^\]]+\]\([^)]+\)/, "").trim()
+    : message.content;
+  async function shareDocument() {
+    if (!documentDownload) return;
+    const url = new URL(documentDownload[2], window.location.origin).href;
+    try {
+      if (navigator.share) await navigator.share({ title: documentDownload[1], url });
+      else { await navigator.clipboard.writeText(url); }
+    } catch (error) {
+      if (error instanceof Error && error.name !== "AbortError") {
+        try { await navigator.clipboard.writeText(url); } catch { /* Clipboard may be unavailable. */ }
+      }
+    }
+  }
   return (
     <article className={`message ${message.role}${message.streaming ? " streaming" : ""}`}>
       <div className="message-user-content">
         <div className="message-content">
-          {message.content
+          {visibleMessageContent
             ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
                 img: ({ src, alt }) => src
                   ? <button className="message-image-button" type="button" onClick={() => setExpandedImage({ src, alt: alt || "KOPLI AI image" })} aria-label="Open image full screen"><img src={src} alt={alt || "KOPLI AI image"} loading="lazy" /></button>
                   : null
-              }}>{message.content}</ReactMarkdown>
+              }}>{visibleMessageContent}</ReactMarkdown>
             : <div className="thinking-state" role="status"><span>Thinking</span></div>}
           {message.generationType && message.streaming && <div className="generation-card" role="status" aria-live="polite">
             <div className="generation-card-heading"><span className="generation-card-icon">{message.generationType === "image" ? <ImageIcon size={17} /> : <FileText size={17} />}</span><span>{message.progressLabel || (message.generationType === "image" ? "Creating your image" : "Creating your document")}</span><strong>{message.progress ?? 8}%</strong></div>
@@ -314,6 +348,18 @@ function MessageView({
             {message.sources.map((source, index) => <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">[{index + 1}] {source.title || source.url}</a>)}
           </div>}
         </div>
+{documentDownload && <section className="chat-document-card" aria-label="Generated document">
+          <div className="chat-document-top">
+            <span className="chat-document-icon"><FileText size={21} /></span>
+            <div className="chat-document-meta"><strong>{documentDownload[1]}</strong><span>{documentDownload[1].split(".").pop()?.toUpperCase() || "DOCUMENT"} · KOPLI AI</span></div>
+            <span className="chat-document-ready"><Check size={13} /> Ready</span>
+          </div>
+          <div className="chat-document-actions">
+            <a className="chat-document-download" href={documentDownload[2]} download={documentDownload[1]}><Download size={16} /> Download</a>
+            <a className="chat-document-secondary" href={documentDownload[2]} target="_blank" rel="noreferrer"><Eye size={16} /> Preview</a>
+            <button className="chat-document-secondary" type="button" onClick={() => void shareDocument()}><Share2 size={16} /> Share</button>
+          </div>
+        </section>}
           {!!message.attachments?.length && <div className="message-attachments" aria-label="Message attachments">
             {message.attachments.map((attachment, index) => attachment.previewUrl
               ? <button className="message-image-button" type="button" key={`${attachment.fileName}-${index}`} onClick={() => setExpandedImage({ src: attachment.previewUrl!, alt: attachment.fileName })} aria-label={`Open ${attachment.fileName} full screen`}><img src={attachment.previewUrl} alt={attachment.fileName} /></button>
@@ -328,11 +374,22 @@ function MessageView({
       </div>
       {expandedImage && <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="Image preview" onClick={() => setExpandedImage(null)}>
         <div className="image-lightbox-toolbar" onClick={event => event.stopPropagation()}>
-          <span>{expandedImage.alt}</span>
-          <button type="button" onClick={() => void downloadImage()} aria-label="Download image" title="Download"><Download size={19} /></button>
-          <button type="button" onClick={() => setExpandedImage(null)} aria-label="Close image" title="Close"><X size={19} /></button>
+          <button className="image-viewer-icon-button" type="button" onClick={() => setExpandedImage(null)} aria-label="Close image" title="Close"><X size={25} /></button>
+          <div className="image-viewer-spacer" />
+          <div className="image-viewer-more-wrap">
+            <button className="image-viewer-icon-button" type="button" onClick={() => setImageMenuOpen(value => !value)} aria-label="More image options" title="More"><MoreHorizontal size={23} /></button>
+            {imageMenuOpen && <div className="image-viewer-menu">
+              <button type="button" onClick={() => void copyImageLink()}><Copy size={16} />Copy image link</button>
+              <button type="button" onClick={() => setImageActionNotice("Image details: " + expandedImage.alt)}><ImageIcon size={16} />Image details</button>
+            </div>}
+          </div>
+          <button className="image-viewer-icon-button" type="button" onClick={() => void downloadImage()} aria-label="Download image" title="Download"><Download size={22} /></button>
+          <button className="image-viewer-share-button" type="button" onClick={() => void shareImage()}><Share2 size={17} /><span>Share</span></button>
         </div>
-        <img className="image-lightbox-image" src={expandedImage.src} alt={expandedImage.alt} onClick={event => event.stopPropagation()} />
+        <div className="image-lightbox-stage" onClick={event => event.stopPropagation()}>
+          <img className="image-lightbox-image" src={expandedImage.src} alt={expandedImage.alt} />
+        </div>
+        {imageActionNotice && <div className="image-viewer-notice" role="status">{imageActionNotice}</div>}
       </div>}
     </article>
   );
@@ -440,11 +497,25 @@ function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const voiceStreamRef = useRef<MediaStream | null>(null);
   const voiceChunksRef = useRef<Blob[]>([]);
+  const voiceAudioContextRef = useRef<AudioContext | null>(null);
+  const voiceAnalyserRef = useRef<AnalyserNode | null>(null);
+  const voiceMeterFrameRef = useRef<number | null>(null);
+  const voiceMeterSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const voiceMeterLastUpdateRef = useRef(0);
+  const [voiceLevel, setVoiceLevel] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const stickToBottomRef = useRef(true);
   const scrollFrameRef = useRef<number | null>(null);
   const parallaxFrameRef = useRef<number | null>(null);
   const [showScrollToLatest, setShowScrollToLatest] = useState(false);
+
+  useEffect(() => () => {
+    if (voiceMeterFrameRef.current !== null) cancelAnimationFrame(voiceMeterFrameRef.current);
+    voiceStreamRef.current?.getTracks().forEach(track => track.stop());
+    if (voiceAudioContextRef.current && voiceAudioContextRef.current.state !== "closed") {
+      void voiceAudioContextRef.current.close().catch(() => undefined);
+    }
+  }, []);
 
   const currentMode = useMemo(() => modes.find(item => item.id === mode) || modes[1], [mode]);
   const ModeIcon = currentMode.icon;
@@ -1340,6 +1411,59 @@ function App() {
     if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }
 
+  function stopVoiceMeter() {
+    if (voiceMeterFrameRef.current !== null) cancelAnimationFrame(voiceMeterFrameRef.current);
+    voiceMeterFrameRef.current = null;
+    voiceMeterSourceRef.current?.disconnect();
+    voiceMeterSourceRef.current = null;
+    voiceAnalyserRef.current = null;
+    const context = voiceAudioContextRef.current;
+    voiceAudioContextRef.current = null;
+    if (context && context.state !== "closed") void context.close().catch(() => undefined);
+    setVoiceLevel(0);
+  }
+
+  async function startVoiceMeter(stream: MediaStream) {
+    stopVoiceMeter();
+    const AudioContextConstructor = window.AudioContext || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) return;
+    try {
+      const context = new AudioContextConstructor();
+      if (context.state === "suspended") await context.resume();
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.72;
+      const source = context.createMediaStreamSource(stream);
+      source.connect(analyser);
+      voiceAudioContextRef.current = context;
+      voiceAnalyserRef.current = analyser;
+      voiceMeterSourceRef.current = source;
+      const samples = new Float32Array(analyser.fftSize);
+      let smoothed = 0;
+      let lastVoiceAt = 0;
+      const update = (now: number) => {
+        if (voiceAnalyserRef.current !== analyser || context.state === "closed") return;
+        analyser.getFloatTimeDomainData(samples);
+        let sum = 0;
+        for (let index = 0; index < samples.length; index += 1) sum += samples[index] * samples[index];
+        const rms = Math.sqrt(sum / samples.length);
+        const isSpeaking = rms > 0.022;
+        if (isSpeaking) lastVoiceAt = now;
+        const target = isSpeaking ? Math.min(1, Math.max(0, (rms - 0.018) * 12)) : (now - lastVoiceAt > 280 ? 0 : smoothed * 0.82);
+        smoothed += (target - smoothed) * (isSpeaking ? 0.38 : 0.2);
+        if (now - voiceMeterLastUpdateRef.current > 45) {
+          voiceMeterLastUpdateRef.current = now;
+          setVoiceLevel(smoothed < 0.015 ? 0 : smoothed);
+        }
+        voiceMeterFrameRef.current = requestAnimationFrame(update);
+      };
+      voiceMeterFrameRef.current = requestAnimationFrame(update);
+    } catch (error) {
+      console.warn("Live microphone waveform is unavailable.", error);
+      stopVoiceMeter();
+    }
+  }
+
   async function startRecorderVoiceFallback() {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setNotice("Voice recording is not supported in this browser. Try Chrome and allow microphone access.");
@@ -1348,6 +1472,7 @@ function App() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       voiceStreamRef.current = stream;
+      await startVoiceMeter(stream);
       voiceChunksRef.current = [];
       const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(type => MediaRecorder.isTypeSupported(type));
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
@@ -1356,12 +1481,14 @@ function App() {
       recorder.onerror = () => {
         setNotice("Microphone recording failed. Check microphone permission and try again.");
         setVoiceActive(false);
+        stopVoiceMeter();
         stream.getTracks().forEach(track => track.stop());
         voiceStreamRef.current = null;
         mediaRecorderRef.current = null;
       };
       recorder.onstop = async () => {
         setVoiceActive(false);
+        stopVoiceMeter();
         stream.getTracks().forEach(track => track.stop());
         voiceStreamRef.current = null;
         mediaRecorderRef.current = null;
@@ -1393,6 +1520,7 @@ function App() {
       recognitionRef.current.stop();
       recognitionRef.current = null;
       setVoiceActive(false);
+      stopVoiceMeter();
       return;
     }
     if (mediaRecorderRef.current?.state === "recording") {
@@ -1426,11 +1554,32 @@ function App() {
       setNotice(`Voice input failed: ${event.error}. If your browser blocks speech recognition, use a supported browser or retry.`);
       setVoiceActive(false);
       recognitionRef.current = null;
+      stopVoiceMeter();
+      voiceStreamRef.current?.getTracks().forEach(track => track.stop());
+      voiceStreamRef.current = null;
     };
-    recognition.onend = () => { setVoiceActive(false); recognitionRef.current = null; };
+    recognition.onend = () => {
+      setVoiceActive(false);
+      recognitionRef.current = null;
+      stopVoiceMeter();
+      voiceStreamRef.current?.getTracks().forEach(track => track.stop());
+      voiceStreamRef.current = null;
+    };
     recognitionRef.current = recognition;
-    try { recognition.start(); setVoiceActive(true); }
-    catch (error) { recognitionRef.current = null; void startRecorderVoiceFallback(); }
+    try {
+      recognition.start();
+      setVoiceActive(true);
+      setNotice("Listening… speak naturally in your selected language.");
+      if (navigator.mediaDevices?.getUserMedia) {
+        void navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+          .then(stream => {
+            if (recognitionRef.current !== recognition) { stream.getTracks().forEach(track => track.stop()); return; }
+            voiceStreamRef.current = stream;
+            void startVoiceMeter(stream);
+          })
+          .catch(error => console.warn("Microphone level visualization permission unavailable.", error));
+      }
+    } catch (error) { recognitionRef.current = null; void startRecorderVoiceFallback(); }
   }
 
   async function runWebSearch(event: FormEvent) {
@@ -1576,6 +1725,7 @@ function App() {
       {mobileViewport && sidebarOpen && <button className="sidebar-overlay" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`} aria-label="Main navigation">
         <div className="brand"><span className="brand-mark"><img className="hen-image hen-small" src="/logo.png" alt="" /></span><strong>KOPLI <b>AI</b></strong></div>
+        <button className="sidebar-close" type="button" aria-label="Close dashboard navigation" title="Close dashboard" onClick={() => setSidebarOpen(false)}><X size={19} /></button>
         <button className="new-chat" aria-label="New chat" title="New chat" onClick={newChat}><Plus size={18} aria-hidden="true" /><span>New chat</span></button>
         <nav className="nav" aria-label="Workspace">
           {navigation.map(item => {
@@ -1604,8 +1754,8 @@ function App() {
 
       <main className="main" data-section={section} data-sidebar-open={sidebarOpen ? "true" : "false"}>
         <div className="chat-floating-controls" aria-label="Chat controls">
-          <button className="icon-button floating-menu-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} title="Menu" onClick={() => { setSidebarOpen(value => !value); setChatActionsOpen(false); setComposerModeOpen(false); setAttachmentMenuOpen(false); setHeaderModeOpen(false); }}><Menu size={20} /></button>
-          {!sidebarOpen && <div className="chat-floating-actions">
+          {!sidebarOpen && <button className="icon-button floating-menu-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} title="Menu" onClick={() => { setSidebarOpen(value => !value); setChatActionsOpen(false); setComposerModeOpen(false); setAttachmentMenuOpen(false); setHeaderModeOpen(false); }}><Menu size={20} /></button>}
+          {!sidebarOpen && {!sidebarOpen && <div className="chat-floating-actions">
             {section === "Chat" && <button className="floating-new-chat" type="button" onClick={() => { setChatLocked(false); newChat(); }}><Plus size={17} /><span>New chat</span></button>}
             <div className="chat-actions-wrap">
               <button className="icon-button floating-more-button" type="button" aria-label="Chat options" title="Chat options" aria-expanded={chatActionsOpen} onClick={() => setChatActionsOpen(value => !value)}><MoreHorizontal size={20} /></button>
@@ -1676,7 +1826,7 @@ function App() {
                         return <button key={option.id} type="button" className={mode === option.id ? "selected" : ""} onClick={() => { setMode(option.id); setComposerModeOpen(false); }}><Icon size={16} /><div><strong>{option.label}</strong><span>{option.detail}</span></div></button>;
                       })}</div>}
                     </div>
-                    <button className={`composer-button${voiceActive ? " selected" : ""}`} type="button" aria-label={voiceActive ? "Stop voice input" : "Start voice input"} title="Voice input" onClick={toggleVoice}><Mic size={18} /></button>
+                    <button className={`composer-button${voiceActive ? " selected" : ""}`} type="button" aria-label={voiceActive ? "Stop voice input" : "Start voice input"} title="Voice input" onClick={toggleVoice}><Mic size={18} /></button>{voiceActive && <div className="voice-live-indicator" role="status" aria-live="polite"><span className="voice-live-bars" aria-hidden="true">{Array.from({ length: 17 }, (_, index) => <i key={index} style={{ height: `${4 + voiceLevel * (8 + (index % 5) * 4)}px`, opacity: voiceLevel > 0.025 ? 0.55 + voiceLevel * 0.45 : 0.35 }} />)}</span><span className="voice-live-label">Listening...</span></div>}
                     {streaming
                       ? <button className="send-button" type="button" aria-label="Stop response" onClick={() => abortRef.current?.abort()}><X size={18} /></button>
                       : <button className="send-button" type="submit" disabled={chatLocked || uploadBusy || (!prompt.trim() && !uploadedFiles.length)} aria-label="Send message"><Send size={18} /></button>}
