@@ -1755,7 +1755,7 @@ function App() {
       <main className="main" data-section={section} data-sidebar-open={sidebarOpen ? "true" : "false"}>
         <div className="chat-floating-controls" aria-label="Chat controls">
           {!sidebarOpen && <button className="icon-button floating-menu-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} title="Menu" onClick={() => { setSidebarOpen(value => !value); setChatActionsOpen(false); setComposerModeOpen(false); setAttachmentMenuOpen(false); setHeaderModeOpen(false); }}><Menu size={20} /></button>}
-          {!sidebarOpen && {!sidebarOpen && <div className="chat-floating-actions">
+          {!sidebarOpen && <div className="chat-floating-actions">
             {section === "Chat" && <button className="floating-new-chat" type="button" onClick={() => { setChatLocked(false); newChat(); }}><Plus size={17} /><span>New chat</span></button>}
             <div className="chat-actions-wrap">
               <button className="icon-button floating-more-button" type="button" aria-label="Chat options" title="Chat options" aria-expanded={chatActionsOpen} onClick={() => setChatActionsOpen(value => !value)}><MoreHorizontal size={20} /></button>
