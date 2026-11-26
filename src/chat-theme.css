@@ -1243,3 +1243,45 @@
 .dark .voice-live-label { color:#a9baff; }
 @media(max-width:480px) { .voice-live-indicator { gap:5px; padding:0 4px; } .voice-live-label { font-size:10px; } .voice-live-bars { min-width:40px; gap:1.5px; } .voice-live-bars i { width:2px; } }
 @media(prefers-reduced-motion:reduce) { .voice-live-bars i { transition:none; } }
+
+
+/* Theme integrity: the chat surface must follow the selected appearance.
+   Keep the light presentation clean while restoring the premium dark canvas
+   when the user explicitly selects dark mode. */
+.dark .chat-shell {
+  background:
+    radial-gradient(ellipse at 52% 42%, rgba(25, 43, 77, .38), transparent 49%),
+    radial-gradient(ellipse at 10% 90%, rgba(49, 50, 106, .16), transparent 34%),
+    linear-gradient(145deg, #080b14, #0a1020 57%, #090c16) !important;
+}
+.dark .message-content,
+.dark .message.assistant .message-content {
+  color: #e8edf8 !important;
+}
+.dark .message-content p,
+.dark .message-content li,
+.dark .message-content blockquote,
+.dark .message-content h1,
+.dark .message-content h2,
+.dark .message-content h3,
+.dark .message-content strong,
+.dark .message-content code {
+  color: inherit;
+}
+.dark .chat-floating-controls .floating-menu-button,
+.dark .chat-floating-controls .floating-more-button {
+  border-color: rgba(148, 163, 184, .24);
+  background: rgba(16, 22, 38, .92);
+  color: #e8edf8;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .22);
+}
+.dark .chat-floating-controls .floating-menu-button:hover,
+.dark .chat-floating-controls .floating-more-button:hover {
+  background: #1b2740;
+}
+.dark .floating-new-chat {
+  border-color: rgba(148, 163, 184, .24);
+  background: rgba(16, 22, 38, .92);
+  color: #e8edf8;
+}
+.dark .floating-new-chat:hover { background: #1b2740; }
