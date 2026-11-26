@@ -93,6 +93,9 @@ const uploads = path.join(storage, "uploads");
 for (const dir of [storage, generated, uploads]) fs.mkdirSync(dir, { recursive: true });
 const storageBucket = process.env.SUPABASE_STORAGE_BUCKET?.trim() || "kopli-user-files";
 const persistentStorageConfigured = () => configured(process.env.SUPABASE_URL) && configured(process.env.SUPABASE_SERVICE_ROLE_KEY);
+export function shouldRejectEphemeralFileStorage(isVercel: boolean, persistentStorageIsConfigured: boolean) {
+  return isVercel && !persistentStorageIsConfigured;
+}
 function storageObjectUrl(objectPath: string) {
   const base = process.env.SUPABASE_URL?.trim().replace(/\/+$/, "");
   if (!base || !persistentStorageConfigured()) throw new Error("Persistent file storage is not configured.");
@@ -144,6 +147,9 @@ function persistentObjectPath(userId: string, kind: string, id: string, name: st
 }
 async function saveUserFile(args: { id: string; userId: string; name: string; mimeType: string; bytes: Buffer; kind: string; localPath: string }) {
   if (!prisma) throw new Error("File metadata database is unavailable.");
+  if (shouldRejectEphemeralFileStorage(Boolean(process.env.VERCEL), persistentStorageConfigured())) {
+    throw new Error("Persistent file storage is not configured. Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel before saving files.");
+  }
   let storedPath = args.localPath;
   if (process.env.VERCEL && persistentStorageConfigured()) {
     const objectPath = persistentObjectPath(args.userId, args.kind, args.id, args.name);
@@ -486,7 +492,14 @@ app.post("/api/voice/transcribe", rateLimit({
   limit: 20,
   standardHeaders: "draft-7",
   legacyHeaders: false
-}), voiceUpload.single("audio"), async (req, res) => {
+}), async (req, res, next) => {
+  try {
+    if (!await currentUser(req)) return res.status(401).json({ error: "Sign in to use voice transcription." });
+    return next();
+  } catch {
+    return res.status(503).json({ error: "Account verification is temporarily unavailable. Please try again." });
+  }
+}, voiceUpload.single("audio"), async (req, res) => {
   const audioPath = req.file?.path;
   if (!audioPath) return res.status(400).json({ error: "Record a voice message before transcribing." });
   try {
@@ -846,11 +859,12 @@ app.post("/api/auth/register", authRateLimit, async (req, res) => {
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(409).json({ error: "An account with this email already exists." });
     const passwordHash = await bcrypt.hash(password, 12);
-    const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
-    const role = ownerEmail && email === ownerEmail ? "owner" : "user";
-    const user = await prisma.user.create({ data: { email, name, passwordHash, role, emailVerified: true } });
-    await createSession(user.id, req, res);
-    res.status(201).json({ user: { email: user.email, name: user.name, role } });
+    // New accounts must prove control of their email address before they can sign in.
+    // Owner privileges are granted only after the configured owner email is verified.
+    const user = await prisma.user.create({
+      data: { email, name, passwordHash, role: "user", emailVerified: false }
+    });
+    res.status(201).json({ message: "Account created. Verify your email address before signing in." });
   } catch (error) {
     console.error("Account registration failed:", error);
     if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
@@ -869,9 +883,12 @@ app.post("/api/auth/login", authRateLimit, async (req, res) => {
     if (!user?.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
       return res.status(401).json({ error: "Invalid email or password." });
     }
-    const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
-    const role: "user" | "owner" = ownerEmail && user.email === ownerEmail ? "owner" : "user";
-    if (user.role !== role) await prisma.user.update({ where: { id: user.id }, data: { role } });
+    if (!user.emailVerified) {
+      return res.status(403).json({ error: "Please verify your email address before signing in. Use the resend verification option if you need a new link." });
+    }
+    // Never promote an account during login. Owner privileges are assigned only
+    // by the one-time email-verification flow or an authenticated administrator.
+    const role: "user" | "owner" = user.role === "owner" ? "owner" : "user";
     await createSession(user.id, req, res);
     res.json({ user: { email: user.email, name: user.name, role } });
   } catch (error) {
@@ -922,7 +939,11 @@ app.post("/api/auth/verify-email", authRateLimit, async (req, res) => {
       data: { usedAt: verifiedAt }
     });
     if (!consumed.count) throw new Error("Verification link was already used or expired.");
-    await tx.user.update({ where: { id: verification.userId }, data: { emailVerified: true } });
+    const verifiedUser = await tx.user.findUnique({ where: { id: verification.userId }, select: { email: true } });
+    if (!verifiedUser) throw new Error("The account for this verification link no longer exists.");
+    const ownerEmail = process.env.KOPLI_OWNER_EMAIL?.trim().toLowerCase();
+    const role = ownerEmail && verifiedUser.email.toLowerCase() === ownerEmail ? "owner" : "user";
+    await tx.user.update({ where: { id: verification.userId }, data: { emailVerified: true, role } });
     await tx.emailVerificationToken.deleteMany({ where: { userId: verification.userId, id: { not: verification.id } } });
   });
   res.json({ message: "Email verified. You can now sign in to KOPLI AI." });
@@ -2317,12 +2338,15 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
   res.status(status >= 400 && status < 600 ? status : 500).json({ error: status === 413 ? "The request is too large." : "The request could not be completed." });
 });
 
-app.get(["/health", "/api/health"], (_req, res) => {
-  const ready = databaseStatus === "ready";
-  const fileStorageReady = !process.env.VERCEL || persistentStorageConfigured();
-  const status = ready && fileStorageReady ? "ok" : "degraded";
+app.get("/health", (_req, res) => res.status(200).json({ status: "ok", live: true }));
+
+// Readiness requires both a live database connection and durable file storage.
+app.get("/api/health", (_req, res) => {
+  const databaseReadyNow = databaseStatus === "ready";
+  const fileStorageReady = !shouldRejectEphemeralFileStorage(Boolean(process.env.VERCEL), persistentStorageConfigured());
+  const ready = databaseReadyNow && fileStorageReady;
   return res.status(ready ? 200 : 503).json({
-    status,
+    status: ready ? "ok" : "degraded",
     ready,
     persistence: databaseStatus,
     fileStorage: fileStorageReady ? "persistent" : "temporary",
