@@ -1733,7 +1733,6 @@ function App() {
             const label = ({Chat:"AI Assistant",Search:"Web Search",Explore:"Explore AI",Library:"My Files",Settings:"Settings",Admin:"Admin"} as Record<string,string>)[item.label];
             return <button key={item.label} className={section === item.label ? "active" : ""} aria-label={label} title={label} aria-current={section === item.label ? "page" : undefined} onClick={() => chooseSection(item.label)}><Icon size={18} aria-hidden="true" /><span>{label}</span></button>;
           })}
-          {user?.role === "owner" && <button className={section === "Admin" ? "active" : ""} aria-label="Admin dashboard" title="Admin dashboard" aria-current={section === "Admin" ? "page" : undefined} onClick={() => chooseSection("Admin")}><ShieldCheck size={18} aria-hidden="true" /><span>Admin dashboard</span></button>}
         </nav>
         <button className="sidebar-about" aria-label="About KOPLI AI" title="About KOPLI AI" onClick={() => { setSection("Settings"); setSettingsDetail("About KOPLI AI"); setSidebarOpen(false); }}><CircleHelp size={17} aria-hidden="true" /><span>About KOPLI AI</span></button>
         <div className="history">
@@ -1755,7 +1754,7 @@ function App() {
       <main className="main" data-section={section} data-sidebar-open={sidebarOpen ? "true" : "false"}>
         <div className="chat-floating-controls" aria-label="Chat controls">
           {!sidebarOpen && <button className="icon-button floating-menu-button" aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"} title="Menu" onClick={() => { setSidebarOpen(value => !value); setChatActionsOpen(false); setComposerModeOpen(false); setAttachmentMenuOpen(false); setHeaderModeOpen(false); }}><Menu size={20} /></button>}
-          {!sidebarOpen && <div className="chat-floating-actions">
+          {!sidebarOpen && section === "Chat" && <div className="chat-floating-actions">
             {section === "Chat" && <button className="floating-new-chat" type="button" onClick={() => { setChatLocked(false); newChat(); }}><Plus size={17} /><span>New chat</span></button>}
             <div className="chat-actions-wrap">
               <button className="icon-button floating-more-button" type="button" aria-label="Chat options" title="Chat options" aria-expanded={chatActionsOpen} onClick={() => setChatActionsOpen(value => !value)}><MoreHorizontal size={20} /></button>
