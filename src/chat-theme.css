@@ -1092,3 +1092,154 @@
 .image-edit-comparison figcaption { color:var(--text-secondary);font-size:12px;font-weight:650; }
 .image-edit-comparison .generated-image-preview { width:100%;max-height:520px;object-fit:contain;border:1px solid var(--line);border-radius:13px;background:var(--surface); }
 @media (max-width:560px) { .image-edit-comparison { grid-template-columns:1fr; }.image-edit-comparison .generated-image-preview { max-height:420px; } }
+
+
+/* Full-screen image viewer styled for a mobile-first, gallery-like experience. */
+.image-lightbox {
+  position:fixed; inset:0; z-index:5000; display:flex; flex-direction:column;
+  justify-content:space-between; gap:0; padding: max(12px,env(safe-area-inset-top)) 16px max(14px,env(safe-area-inset-bottom));
+  background:#000; color:#fff; backdrop-filter:none;
+}
+.image-lightbox-toolbar {
+  width:100%; min-height:64px; flex:0 0 64px; display:flex; align-items:center;
+  justify-content:flex-start; gap:10px; color:#fff;
+}
+.image-viewer-spacer { flex:1; }
+.image-viewer-icon-button {
+  display:grid; place-items:center; width:54px; height:54px; flex:0 0 54px;
+  border:1px solid rgba(255,255,255,.12); border-radius:50%;
+  background:rgba(255,255,255,.17); color:#fff;
+}
+.image-viewer-share-button {
+  min-width:112px; height:54px; display:flex; align-items:center; justify-content:center; gap:8px;
+  border:0; border-radius:28px; padding:0 20px; background:#fff; color:#111;
+  font-size:16px; font-weight:750;
+}
+.image-viewer-more-wrap { position:relative; }
+.image-viewer-menu {
+  position:absolute; z-index:2; top:62px; right:0; width:190px; padding:6px;
+  border:1px solid rgba(255,255,255,.14); border-radius:14px; background:#242424;
+  box-shadow:0 12px 32px rgba(0,0,0,.45);
+}
+.image-viewer-menu button {
+  width:100%; min-height:44px; display:flex; align-items:center; gap:10px; padding:8px 10px;
+  border:0; border-radius:9px; background:transparent; color:#fff; text-align:left;
+}
+.image-viewer-menu button:hover { background:rgba(255,255,255,.12); }
+.image-lightbox-stage {
+  flex:1 1 auto; min-height:0; width:100%; display:flex; align-items:center; justify-content:center;
+  overflow:hidden; padding:10px 0;
+}
+.image-lightbox-image {
+  display:block; width:auto; height:auto; max-width:100%; max-height:100%;
+  object-fit:contain; border:0; border-radius:0; background:transparent;
+}
+.image-viewer-bottom-actions {
+  width:100%; min-height:112px; flex:0 0 auto; display:grid; grid-template-columns:repeat(4,minmax(0,1fr));
+  align-items:center; justify-items:center; gap:8px; padding-top:10px;
+}
+.image-viewer-bottom-actions button {
+  min-width:0; min-height:90px; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:8px; border:0; border-radius:16px; background:transparent; color:#fff; font:inherit;
+}
+.image-viewer-bottom-actions button:active { background:rgba(255,255,255,.14); }
+.image-viewer-bottom-actions button svg,
+.image-viewer-markup-icon {
+  width:54px; height:54px; display:grid; place-items:center; padding:14px;
+  border:1px solid rgba(255,255,255,.13); border-radius:50%; background:rgba(255,255,255,.17);
+}
+.image-viewer-bottom-actions button span:last-child { font-size:14px; }
+.image-viewer-markup-icon { font-size:24px; line-height:1; }
+.image-viewer-notice {
+  position:absolute; left:50%; bottom:125px; transform:translateX(-50%);
+  max-width:calc(100% - 32px); padding:10px 16px; border-radius:999px;
+  background:rgba(42,42,42,.96); color:#fff; font-size:13px; text-align:center;
+}
+@media(max-width:480px) {
+  .image-lightbox { padding-left:12px; padding-right:12px; }
+  .image-lightbox-toolbar { gap:7px; }
+  .image-viewer-icon-button { width:48px; height:48px; flex-basis:48px; }
+  .image-viewer-share-button { min-width:94px; height:48px; padding:0 14px; }
+  .image-viewer-bottom-actions { min-height:104px; }
+  .image-viewer-bottom-actions button svg, .image-viewer-markup-icon { width:48px; height:48px; padding:12px; }
+  .image-viewer-bottom-actions button span:last-child { font-size:13px; }
+}
+
+
+/* Dashboard navigation toggle: keep controls separated and provide an in-panel close action. */
+.sidebar { position:relative; }
+.sidebar-close {
+  position:absolute; top:12px; right:12px; z-index:5;
+  display:grid; place-items:center; width:38px; height:38px;
+  border:1px solid var(--line); border-radius:50%;
+  background:var(--surface-raised); color:var(--text-primary); cursor:pointer;
+}
+.sidebar-close:hover { background:var(--surface); }
+.chat-floating-controls { min-width:0; gap:10px; }
+.chat-floating-controls > .floating-menu-button { flex:0 0 42px; }
+.chat-floating-actions { min-width:0; margin-left:auto; }
+@media (max-width:900px) {
+  .sidebar-close { top:max(10px, env(safe-area-inset-top)); right:10px; width:40px; height:40px; }
+  .sidebar.open { z-index:120; }
+  .sidebar-overlay { z-index:110; }
+  .chat-floating-controls { top:max(8px, env(safe-area-inset-top)); }
+  .chat-floating-actions { gap:6px; }
+  .floating-new-chat { white-space:nowrap; }
+}
+
+
+/* Compact generated-document card in chat */
+.chat-document-card {
+  width: min(100%, 620px);
+  margin: 10px 0 12px;
+  padding: 12px;
+  border: 1px solid rgba(116, 143, 205, .32);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(34, 54, 103, .16), rgba(111, 65, 180, .08));
+  box-shadow: 0 8px 24px rgba(20, 38, 85, .08);
+}
+.chat-document-top { display:flex; align-items:center; gap:10px; min-width:0; }
+.chat-document-icon {
+  display:grid; place-items:center; flex:0 0 40px; width:40px; height:40px;
+  border-radius:12px; color:#fff; background:linear-gradient(140deg,#16a8ff,#6547f5);
+}
+.chat-document-meta { display:flex; flex:1; min-width:0; flex-direction:column; gap:3px; }
+.chat-document-meta strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:650; }
+.chat-document-meta span { color:var(--muted,#8b93a7); font-size:11px; }
+.chat-document-ready {
+  display:inline-flex; align-items:center; gap:4px; flex:0 0 auto;
+  padding:5px 8px; border:1px solid rgba(34,197,94,.3); border-radius:20px;
+  color:#16a34a; font-size:11px; font-weight:600;
+}
+.chat-document-actions { display:flex; align-items:center; gap:7px; margin-top:10px; }
+.chat-document-actions a,.chat-document-actions button {
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  min-height:36px; padding:0 11px; border:1px solid var(--line,#d9deea);
+  border-radius:10px; color:var(--text,#252b38); background:rgba(255,255,255,.035);
+  font:inherit; font-size:12px; font-weight:600; text-decoration:none; cursor:pointer;
+}
+.chat-document-actions .chat-document-download {
+  flex:1; color:#fff; border-color:transparent;
+  background:linear-gradient(100deg,#159ff4,#6544ef 72%,#b13ce5);
+  box-shadow:0 3px 12px rgba(81,91,238,.2);
+}
+.chat-document-actions .chat-document-secondary { flex:0 0 auto; }
+@media (max-width:480px) {
+  .chat-document-card { padding:10px; border-radius:14px; }
+  .chat-document-actions { gap:5px; }
+  .chat-document-actions a,.chat-document-actions button { min-height:34px; padding:0 8px; font-size:11px; }
+  .chat-document-ready { padding:4px 6px; }
+}
+.dark .chat-document-card { border-color:rgba(111,145,230,.32); background:linear-gradient(145deg,rgba(27,47,91,.72),rgba(54,31,91,.45)); }
+.dark .chat-document-meta span { color:#aab7d8; }
+.dark .chat-document-actions .chat-document-secondary { color:#eef2ff; border-color:rgba(160,176,220,.25); background:rgba(10,16,34,.32); }
+
+
+/* Real microphone RMS-reactive recording indicator. The mic button remains fixed. */
+.voice-live-indicator { display:inline-flex; align-items:center; gap:8px; min-width:0; max-width:190px; padding:0 9px; color:var(--text,#252b38); }
+.voice-live-bars { display:inline-flex; align-items:center; justify-content:center; gap:2px; height:28px; min-width:54px; }
+.voice-live-bars i { display:block; width:2px; min-height:3px; max-height:25px; border-radius:5px; background:linear-gradient(180deg,#a855f7 0%,#3979ff 100%); transition:height 65ms linear,opacity 100ms ease; }
+.voice-live-label { font-size:11px; font-weight:600; white-space:nowrap; color:#4f78d8; }
+.dark .voice-live-label { color:#a9baff; }
+@media(max-width:480px) { .voice-live-indicator { gap:5px; padding:0 4px; } .voice-live-label { font-size:10px; } .voice-live-bars { min-width:40px; gap:1.5px; } .voice-live-bars i { width:2px; } }
+@media(prefers-reduced-motion:reduce) { .voice-live-bars i { transition:none; } }
