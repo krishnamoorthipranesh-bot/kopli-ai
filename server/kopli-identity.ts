@@ -5,7 +5,7 @@ const founderQuestionPattern =
   /\b(owner|ownership|founder|founder\s+of|creator|created|developed|developer|built|who\s+(?:is|was)|who\s+made)\b|யார்|யாரு|உருவாக்க|நிறுவனர்|உரிமையாளர்|படைப்பாளர்/i;
 
 const explicitOtherOrganizationPattern = /\bof\s+(?!kopli\b)[a-z][a-z0-9.-]*/i;
-const tanglishPattern = /\b(yaaru|yaru|yara|pann(iruk|itu|athu|anga)|uruvakk|create pann|build pann|develop pann)\b/i;
+const tanglishPattern = /\b(yaaru|yaru|yaar|yara|pann(iruk|itu|athu|anga)|uruvakk|create pann|build pann|develop pann)\b/i;
 const englishQuestionPattern = /\b(who|whose|which person)\b|\b(owner|founder|creator|created|developed|developer|built)\b/i;
 
 export function answerKopliFounderQuestion(prompt: string, history: Array<{ role?: string; content?: string }> = []) {
@@ -17,7 +17,8 @@ export function answerKopliFounderQuestion(prompt: string, history: Array<{ role
   const recentContextMentionsKopli = history.some(item =>
     typeof item.content === "string" && /\bkopli(?:\s*[-_ ]?\s*ai)?\b/i.test(item.content)
   );
-  if (refersToOtherOrganization || (!mentionsKopli && !recentContextMentionsKopli && !englishQuestionPattern.test(text))) {
+  const genericFounderQuestion = englishQuestionPattern.test(text) || /யார்|யாரு|யாரால்/.test(text) || tanglishPattern.test(text);
+  if (refersToOtherOrganization || (!mentionsKopli && !recentContextMentionsKopli && !genericFounderQuestion)) {
     return null;
   }
 
