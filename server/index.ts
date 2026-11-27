@@ -1229,14 +1229,14 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
   if (founderAnswer) {
     assistantFull = founderAnswer;
     conversation.messages.push({ role: "assistant", content: founderAnswer });
-    for (const word of founderAnswer.split(/(\\s+)/)) {
-      res.write(`data: ${JSON.stringify({ text: word })}\\n\\n`);
+    for (const word of founderAnswer.split(/(\s+)/)) {
+      res.write(`data: ${JSON.stringify({ text: word })}\n\n`);
     }
   } else if (!groq) {
     const text = demoReply(message);
     assistantFull = text;
-    for (const word of text.split(/(\\s+)/)) {
-      res.write(`data: ${JSON.stringify({ text: word })}\\n\\n`);
+    for (const word of text.split(/(\s+)/)) {
+      res.write(`data: ${JSON.stringify({ text: word })}\n\n`);
     }
   } else {
     try {
