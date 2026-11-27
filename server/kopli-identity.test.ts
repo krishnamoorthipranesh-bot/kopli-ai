@@ -5,6 +5,10 @@ describe("KOPLI AI permanent founder identity", () => {
   it("answers direct English owner and creator questions", () => {
     expect(answerKopliFounderQuestion("Who is the owner of KOPLI AI?")).toBe(KOPLI_FOUNDER_ANSWER);
     expect(answerKopliFounderQuestion("Who created KOPLI AI?")).toBe(KOPLI_FOUNDER_ANSWER);
+    expect(answerKopliFounderQuestion("Who owns KOPLI AI?")).toBe(KOPLI_FOUNDER_ANSWER);
+    expect(answerKopliFounderQuestion("Who founded KOPLI AI?")).toBe(KOPLI_FOUNDER_ANSWER);
+    expect(answerKopliFounderQuestion("Who developed KOPLI AI?")).toBe(KOPLI_FOUNDER_ANSWER);
+    expect(answerKopliFounderQuestion("Who built KOPLI AI?")).toBe(KOPLI_FOUNDER_ANSWER);
     expect(answerKopliFounderQuestion("Who is the founder?")).toBe(KOPLI_FOUNDER_ANSWER);
   });
 
