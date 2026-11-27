@@ -773,19 +773,26 @@ function App() {
   }, [prompt]);
   useEffect(() => {
     const viewport = window.visualViewport;
-    const updateViewportHeight = () => {
+    const updateViewportMetrics = () => {
       const height = viewport?.height || window.innerHeight;
+      const keyboardHeight = viewport
+        ? Math.max(0, window.innerHeight - (viewport.height + viewport.offsetTop))
+        : 0;
       document.documentElement.style.setProperty("--kopli-viewport-height", `${Math.round(height)}px`);
+      document.documentElement.style.setProperty("--keyboard-inset", `${Math.round(keyboardHeight > 100 ? keyboardHeight : 0)}px`);
     };
-    updateViewportHeight();
-    viewport?.addEventListener("resize", updateViewportHeight);
-    viewport?.addEventListener("scroll", updateViewportHeight);
-    window.addEventListener("orientationchange", updateViewportHeight);
+    updateViewportMetrics();
+    viewport?.addEventListener("resize", updateViewportMetrics);
+    viewport?.addEventListener("scroll", updateViewportMetrics);
+    window.addEventListener("resize", updateViewportMetrics);
+    window.addEventListener("orientationchange", updateViewportMetrics);
     return () => {
-      viewport?.removeEventListener("resize", updateViewportHeight);
-      viewport?.removeEventListener("scroll", updateViewportHeight);
-      window.removeEventListener("orientationchange", updateViewportHeight);
+      viewport?.removeEventListener("resize", updateViewportMetrics);
+      viewport?.removeEventListener("scroll", updateViewportMetrics);
+      window.removeEventListener("resize", updateViewportMetrics);
+      window.removeEventListener("orientationchange", updateViewportMetrics);
       document.documentElement.style.removeProperty("--kopli-viewport-height");
+      document.documentElement.style.removeProperty("--keyboard-inset");
     };
   }, []);
 
