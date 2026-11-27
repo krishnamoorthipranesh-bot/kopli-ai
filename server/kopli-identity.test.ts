@@ -11,10 +11,12 @@ describe("KOPLI AI permanent founder identity", () => {
   it("answers Tanglish identity questions naturally", () => {
     expect(answerKopliFounderQuestion("Kopli AI yaaru create pannathu?")).toContain("Pranesh KK");
     expect(answerKopliFounderQuestion("KOPLI AI owner yaar?")).toContain("Pranesh KK");
+    expect(answerKopliFounderQuestion("KOPLI AI owner yaar?")).toContain("dhaan create pannirukkar");
   });
 
   it("answers Tamil-script identity questions in Tamil", () => {
     expect(answerKopliFounderQuestion("யார் KOPLI AI உருவாக்கியது?")).toContain("Pranesh KK");
+    expect(answerKopliFounderQuestion("யார் நிறுவனர்?")).toContain("Pranesh KK");
   });
 
   it("understands a short follow-up when recent chat context is about KOPLI AI", () => {
