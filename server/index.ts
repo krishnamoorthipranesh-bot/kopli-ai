@@ -466,6 +466,17 @@ const upload = multer({
   dest: uploads,
   limits: { fileSize: 25 * 1024 * 1024, files: 10 },
   fileFilter: (_req, file, callback) => {
+    // Some Android/iOS pickers report an empty or generic MIME type.
+    // Infer only from a known extension, then still enforce file signatures below.
+    if (!allowedMimeTypes.has(file.mimetype) && (!file.mimetype || file.mimetype === "application/octet-stream")) {
+      const extension = path.extname(file.originalname).toLowerCase();
+      const fallbackMimeTypes: Record<string, string> = {
+        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+        ".webp": "image/webp", ".gif": "image/gif"
+      };
+      const inferred = fallbackMimeTypes[extension];
+      if (inferred) file.mimetype = inferred;
+    }
     callback(null, allowedMimeTypes.has(file.mimetype));
   }
 });

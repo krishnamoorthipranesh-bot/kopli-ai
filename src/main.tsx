@@ -907,7 +907,20 @@ function App() {
     const imageCount = uploadedFiles.filter(file => file.mimeType.startsWith("image/")).length;
     const supported = /\.(pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv|json|zip|rtf|md|png|jpe?g|webp|gif)$/i;
     const accepted: File[] = [];
-    for (const file of selected) {
+    const mimeByExtension: Record<string, string> = {
+      png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif",
+      pdf: "application/pdf", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      xls: "application/vnd.ms-excel", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ppt: "application/vnd.ms-powerpoint", pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      txt: "text/plain", csv: "text/csv", json: "application/json", zip: "application/zip", rtf: "application/rtf", md: "text/markdown"
+    };
+    const normalizedFiles = selected.map(file => {
+      const extension = file.name.split(".").pop()?.toLowerCase() || "";
+      const inferredType = mimeByExtension[extension];
+      const type = (!file.type || file.type === "application/octet-stream") && inferredType ? inferredType : file.type;
+      return type && type !== file.type ? new File([file], file.name, { type, lastModified: file.lastModified }) : file;
+    });
+    for (const file of normalizedFiles) {
       if (!supported.test(file.name)) { setNotice(`${file.name} is not a supported attachment type.`); continue; }
       if (file.size > 25 * 1024 * 1024) { setNotice(`${file.name} is larger than the 25 MB file limit.`); continue; }
       if (uploadedFiles.length + accepted.length >= 10) { setNotice("Attach up to 10 files per message."); break; }
@@ -2015,7 +2028,7 @@ function App() {
           <button className="dialog-close" aria-label="Close sign in" onClick={closeAuthDialog}><X size={19} /></button>
           <div className="auth-brand">FRIDAY <span>AI</span></div>
           <h1 id="auth-title">{authStage === "forgot" ? "Reset your password" : authStage === "reset" ? "Create new password" : registering ? "Create your account" : "Welcome back"}</h1>
-          <p>{authStage === "forgot" ? "Enter your account email. The secure recovery link opens the new-password form directly." : authStage === "reset" ? "Choose a new password for your account." : registering ? "Create an account to sync conversations and files. Verify your email address before signing in." : "Sign in to your FRIDAY AI account, or continue as a guest."}</p>
+          <p>{authStage === "forgot" ? "Enter your account email. We send a secure reset link, not an OTP code. Open the link to set and confirm your new password." : authStage === "reset" ? "Choose a new password and confirm it to update your account." : registering ? "Create an account to sync conversations and files. Verify your email address before signing in." : "Sign in to your FRIDAY AI account, or continue as a guest."}</p>
           {authStage === "account" && <form onSubmit={event => void submitAuth(event)}>
             {registering && <label>Name<input autoComplete="name" value={authName} onChange={event => setAuthName(event.target.value)} required maxLength={100} /></label>}
             <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
@@ -2030,7 +2043,7 @@ function App() {
             <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
             {authError && <p className="auth-error" role="alert">{authError}</p>}
             {authMessage && <p className="auth-success" role="status">{authMessage}</p>}
-            <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Sending…" : "Send secure password reset link"}</button>
+            <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Sending…" : "Send password reset link"}</button>
             <button className="auth-mode-toggle" type="button" onClick={() => { setAuthStage("account"); setAuthError(""); setAuthMessage(""); }}>Back to sign in</button>
           </form>}
           {authStage === "reset" && <form onSubmit={event => void submitPasswordReset(event)}>
