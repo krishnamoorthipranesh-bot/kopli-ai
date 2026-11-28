@@ -335,7 +335,7 @@ function MessageView({
           {visibleMessageContent
             ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
                 img: ({ src, alt }) => src
-                  ? <button className="message-image-button" type="button" onClick={() => setExpandedImage({ src, alt: alt || "KOPLI AI image" })} aria-label="Open image full screen"><img src={src} alt={alt || "KOPLI AI image"} loading="lazy" /></button>
+                  ? <button className="message-image-button" type="button" onClick={() => setExpandedImage({ src, alt: alt || "FRIDAY AI image" })} aria-label="Open image full screen"><img src={src} alt={alt || "FRIDAY AI image"} loading="lazy" /></button>
                   : null
               }}>{visibleMessageContent}</ReactMarkdown>
             : <div className="thinking-state" role="status"><span>Thinking</span></div>}
@@ -351,7 +351,7 @@ function MessageView({
 {documentDownload && <section className="chat-document-card" aria-label="Generated document">
           <div className="chat-document-top">
             <span className="chat-document-icon"><FileText size={21} /></span>
-            <div className="chat-document-meta"><strong>{documentDownload[1]}</strong><span>{documentDownload[1].split(".").pop()?.toUpperCase() || "DOCUMENT"} · KOPLI AI</span></div>
+            <div className="chat-document-meta"><strong>{documentDownload[1]}</strong><span>{documentDownload[1].split(".").pop()?.toUpperCase() || "DOCUMENT"} · FRIDAY AI</span></div>
             <span className="chat-document-ready"><Check size={13} /> Ready</span>
           </div>
           <div className="chat-document-actions">
@@ -1298,7 +1298,7 @@ function App() {
   }
 
   async function signOut() {
-    if (!user || !window.confirm(`Log out of KOPLI AI as ${user.email}?`)) return;
+    if (!user || !window.confirm(`Log out of FRIDAY AI as ${user.email}?`)) return;
     let cookieCleared = false;
     try { await request("/api/auth/logout", { method: "POST" }); cookieCleared = true; }
     catch (error) {
@@ -1306,7 +1306,7 @@ function App() {
       cookieCleared = message.includes("session cookie was cleared");
       setNotice(cookieCleared
         ? `Your browser session ended, but server invalidation could not be verified: ${message}`
-        : `KOPLI AI could not complete logout. Your session is still active; retry when the server is reachable. ${message}`);
+        : `FRIDAY AI could not complete logout. Your session is still active; retry when the server is reachable. ${message}`);
       if (!cookieCleared) return;
     }
     setUser(null);
@@ -1391,7 +1391,7 @@ function App() {
     if (!user) { setNotice("Sign in to save response feedback."); return; }
     try {
       await request("/api/feedback", jsonRequest("POST", { conversationId: activeId, messageId: message.id, rating }));
-      setNotice("Thanks for helping improve KOPLI AI.");
+      setNotice("Thanks for helping improve FRIDAY AI.");
     } catch (error) { setNotice(errorText(error)); }
   }
 
@@ -1701,7 +1701,7 @@ function App() {
 
   async function shareCurrentChat() {
     setChatActionsOpen(false);
-    const transcript = messages.map(message => `${message.role === "user" ? "You" : "KOPLI AI"}: ${message.content}`).join("\\n\\n");
+    const transcript = messages.map(message => `${message.role === "user" ? "You" : "FRIDAY AI"}: ${message.content}`).join("\\n\\n");
     if (!transcript.trim()) { setNotice("There is no chat to share yet."); return; }
     try {
       await navigator.clipboard.writeText(transcript);
@@ -1724,14 +1724,14 @@ function App() {
   }
 
   const currentHistory = conversations.filter(item => !item.archived);
-  const settingsLinks = ["Appearance", "Personalization", "Data & memory", "Account", "About KOPLI AI"]
+  const settingsLinks = ["Appearance", "Personalization", "Data & memory", "Account", "About FRIDAY AI"]
     .filter(item => item.toLowerCase().includes(settingsSearch.toLowerCase()));
 
   return (
     <div ref={appRootRef} className={`app${dark ? " dark" : ""}${reduceEffects ? " reduce-effects" : ""}`}>
       {mobileViewport && sidebarOpen && <button className="sidebar-overlay" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`} aria-label="Main navigation">
-        <div className="brand"><span className="brand-mark"><img className="hen-image hen-small" src="/logo.png" alt="" /></span><strong>KOPLI <b>AI</b></strong></div>
+        <div className="brand"><span className="brand-mark"><img className="hen-image hen-small" src="/assets/friday-logo.svg" alt="" /></span><strong>KOPLI <b>AI</b></strong></div>
         <button className="sidebar-close" type="button" aria-label="Close dashboard navigation" title="Close dashboard" onClick={() => setSidebarOpen(false)}><X size={19} /></button>
         <button className="new-chat" aria-label="New chat" title="New chat" onClick={newChat}><Plus size={18} aria-hidden="true" /><span>New chat</span></button>
         <nav className="nav" aria-label="Workspace">
@@ -1741,7 +1741,7 @@ function App() {
             return <button key={item.label} className={section === item.label ? "active" : ""} aria-label={label} title={label} aria-current={section === item.label ? "page" : undefined} onClick={() => chooseSection(item.label)}><Icon size={18} aria-hidden="true" /><span>{label}</span></button>;
           })}
         </nav>
-        <button className="sidebar-about" aria-label="About KOPLI AI" title="About KOPLI AI" onClick={() => { setSection("Settings"); setSettingsDetail("About KOPLI AI"); setSidebarOpen(false); }}><CircleHelp size={17} aria-hidden="true" /><span>About KOPLI AI</span></button>
+        <button className="sidebar-about" aria-label="About FRIDAY AI" title="About FRIDAY AI" onClick={() => { setSection("Settings"); setSettingsDetail("About FRIDAY AI"); setSidebarOpen(false); }}><CircleHelp size={17} aria-hidden="true" /><span>About FRIDAY AI</span></button>
         <div className="history">
           <div className="history-title">Recent chats</div>
           {currentHistory.length ? currentHistory.map(conversation => (
@@ -1778,8 +1778,8 @@ function App() {
                 {section === "Chat" && <>
                     <section className="chat-shell" aria-label="Chat">
             {messages.length === 0 ? <div className="welcome">
-              <div className="welcome-hen" data-state={assistantVisualState}><img className="hen-image" src="/logo.png" alt="KOPLI AI" /></div>
-              <h1>What can I help you with?</h1><p>Think, create, explore and discover with KOPLI AI.</p>
+              <div className="welcome-hen" data-state={assistantVisualState}><img className="hen-image" src="/assets/friday-logo.svg" alt="FRIDAY AI" /></div>
+              <h1>What can I help you with?</h1><p>Think, create, explore and discover with FRIDAY AI.</p>
               <div className="suggestions">
                 {["Explain a topic simply", "Help me plan a project", "Write or improve code", "Research a topic"].map((item, index) => <button key={item} onClick={() => { setPrompt(item); textareaRef.current?.focus(); }}><span>{item}</span>{index === 2 ? <Code2 size={17} /> : index === 3 ? <Globe2 size={17} /> : <Sparkles size={17} />}</button>)}
               </div>
@@ -1806,7 +1806,7 @@ function App() {
               <form className="composer" onSubmit={event => void sendMessage(event)}>
                 <textarea ref={textareaRef} className="composer-input" value={prompt} disabled={streaming || chatLocked} onChange={event => setPrompt(event.target.value)} onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
                   if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); }
-                }} placeholder="Work with KOPLI AI" aria-label="Message KOPLI AI" rows={2} />
+                }} placeholder="Work with FRIDAY AI" aria-label="Message FRIDAY AI" rows={2} />
                 <div className="composer-toolbar">
                   <div className="composer-toolbar-left">
                     <div className="attachment-menu-wrap" ref={attachmentMenuRef}>
@@ -1839,7 +1839,7 @@ function App() {
                   </div>
                 </div>
               </form>
-              <div className="disclaimer">KOPLI AI can make mistakes. Check important information.</div>
+              <div className="disclaimer">FRIDAY AI can make mistakes. Check important information.</div>
             </div>
           </section>
         </>}
@@ -1854,7 +1854,7 @@ function App() {
         </section>}
 
         {section === "Explore" && <section className="page">
-          <header className="page-heading"><h1>Explore</h1><p>Create useful content with KOPLI AI tools.</p></header>
+          <header className="page-heading"><h1>Explore</h1><p>Create useful content with FRIDAY AI tools.</p></header>
           <div className="tool-grid explore-tool-grid">
             {([
               ["image", ImageIcon, "Image generation", "Create original images from detailed prompts.", "/tools/explore-image.svg"],
@@ -1874,7 +1874,7 @@ function App() {
               <strong>{toolType === "image" || toolType === "edit" ? "Cloudflare image tools need provider setup" : "AI file generation needs provider setup"}</strong>
               <span>{toolType === "image" || toolType === "edit" ? "Configure CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in Vercel to enable image AI." : "Configure GROQ_API_KEY in Vercel to enable document generation."}</span>
             </div>}
-            <div className="explore-form-heading"><div><span className="eyebrow">KOPLI AI TOOL</span><h2>{({image:"Image generation",edit:"AI image editor",docx:"Documents",pdf:"PDF reports",pptx:"Presentations",xlsx:"Spreadsheets"})[toolType]}</h2></div>{toolResult && <button type="button" className="explore-text-action" onClick={() => { setToolResult(null); setToolPreview(false); }}>Clear result</button>}</div>
+            <div className="explore-form-heading"><div><span className="eyebrow">FRIDAY AI TOOL</span><h2>{({image:"Image generation",edit:"AI image editor",docx:"Documents",pdf:"PDF reports",pptx:"Presentations",xlsx:"Spreadsheets"})[toolType]}</h2></div>{toolResult && <button type="button" className="explore-text-action" onClick={() => { setToolResult(null); setToolPreview(false); }}>Clear result</button>}</div>
             <form onSubmit={event => void generateContent(event)}>
               {toolType !== "image" && toolType !== "edit" && <label className="explore-field"><span>Title <small>(optional)</small></span><input className="chat-search" value={toolTitle} onChange={event => setToolTitle(event.target.value)} maxLength={160} placeholder="Give your file a title" /></label>}
               {toolType === "image" && <div className="explore-image-options">
@@ -1905,12 +1905,12 @@ function App() {
                 {toolEditPreview && <img className="generated-image-preview" src={toolEditPreview} alt="Selected image to edit" />}
                 <small>Cloudflare FLUX Kontext Pro costs about $0.04 per image. Each successful edit may be billed to your Cloudflare account; check your usage limits before editing.</small>
               </div>}
-              <label className="explore-field" htmlFor="tool-prompt"><span>{toolType === "image" ? "Describe the image" : toolType === "edit" ? "How should KOPLI AI edit it?" : "What should KOPLI AI create?"}</span>
+              <label className="explore-field" htmlFor="tool-prompt"><span>{toolType === "image" ? "Describe the image" : toolType === "edit" ? "How should FRIDAY AI edit it?" : "What should FRIDAY AI create?"}</span>
                 <textarea id="tool-prompt" className="chat-search" value={toolPrompt} onChange={event => setToolPrompt(event.target.value)} maxLength={toolType === "edit" ? 1600 : 10000} placeholder={toolType === "image" ? "Describe the subject, composition, lighting, and mood…" : toolType === "edit" ? "Example: remove the background, change the sky to sunset, keep the person unchanged…" : "Describe the content, audience, key points, and any details to include…"} />
               </label>
               <div className="explore-form-footer"><span>{toolPrompt.length.toLocaleString()} / {toolType === "edit" ? "1,600" : "10,000"}</span><button className="auth-submit" type="submit" disabled={!user || toolBusy || !toolPrompt.trim() || (toolType === "edit" && !toolEditFile) || (toolProviders ? (toolType === "image" || toolType === "edit") ? !toolProviders.cloudflareAi : !toolProviders.groq : false)}>{toolBusy ? (toolType === "edit" ? "Editing…" : "Creating…") : toolType === "edit" ? "Edit image" : toolType === "image" && toolResult ? "Regenerate image" : `Create ${toolType.toUpperCase()}`}</button></div>
             </form>
-            {toolBusy && <p className="explore-status" role="status">KOPLI AI is {toolType === "edit" ? "editing your image" : `creating your ${toolType === "image" ? "image" : toolType === "docx" ? "document draft" : toolType.toUpperCase()}`}…</p>}
+            {toolBusy && <p className="explore-status" role="status">FRIDAY AI is {toolType === "edit" ? "editing your image" : `creating your ${toolType === "image" ? "image" : toolType === "docx" ? "document draft" : toolType.toUpperCase()}`}…</p>}
             {toolResult && <div className="generated-image-card explore-result">
               {toolType === "edit" && toolResult.previewUrl ? <div className="image-edit-comparison"><figure><figcaption>Original</figcaption><img className="generated-image-preview" src={toolEditPreview} alt="Original uploaded image" /></figure><figure><figcaption>AI edited</figcaption><img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || "AI edited image"} /></figure></div> : toolType === "image" && toolResult.previewUrl ? <img className="generated-image-preview" src={toolResult.previewUrl} alt={toolPrompt || "AI generated image"} /> : null}
               {toolType === "pdf" && toolResult.previewUrl && <iframe className="explore-pdf-preview" src={toolResult.previewUrl} title={toolResult.fileName} />}
@@ -1936,7 +1936,7 @@ function App() {
         </section>}
 
         {section === "Admin" && <section className="page">
-          <header className="page-heading"><h1>Admin dashboard</h1><p>Monitor KOPLI AI accounts, activity, and private file storage.</p></header>
+          <header className="page-heading"><h1>Admin dashboard</h1><p>Monitor FRIDAY AI accounts, activity, and private file storage.</p></header>
           {adminBusy && <p className="explore-status" role="status">Loading admin overview…</p>}
           {adminOverview && <div className="admin-stat-grid">
             <div className="settings-card modern admin-stat"><span>Total users</span><strong>{adminOverview.users.toLocaleString()}</strong></div>
@@ -1973,11 +1973,11 @@ function App() {
         {section === "Settings" && <section className="settings-page-modern">
           <header className="settings-header-modern"><button className="settings-back" aria-label="Back to chat" onClick={() => chooseSection("Chat")}><ArrowLeft size={19} /></button><h1>Settings</h1><Settings size={19} /></header>
           {!settingsDetail ? <div className="settings-mobile-body">
-            <button className="settings-customize" onClick={() => setSettingsDetail("Personalization")}><span className="settings-gift"><Sparkles size={19} /></span><div><strong>Personalization</strong><span>Customize how KOPLI AI works for you</span></div><ChevronRight size={18} /></button>
+            <button className="settings-customize" onClick={() => setSettingsDetail("Personalization")}><span className="settings-gift"><Sparkles size={19} /></span><div><strong>Personalization</strong><span>Customize how FRIDAY AI works for you</span></div><ChevronRight size={18} /></button>
             <div className="settings-main-card">
               <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("Appearance")}><Sun size={18} /><span>Appearance</span><ChevronRight size={17} /></button>
               <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("Data & memory")}><Brain size={18} /><span>Data &amp; memory</span><ChevronRight size={17} /></button>
-              <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("About KOPLI AI")}><CircleHelp size={18} /><span>About KOPLI AI</span><ChevronRight size={17} /></button>
+              <button className="settings-neutral-row-button" onClick={() => setSettingsDetail("About FRIDAY AI")}><CircleHelp size={18} /><span>About FRIDAY AI</span><ChevronRight size={17} /></button>
               <button className="settings-neutral-row-button" onClick={() => user ? void signOut() : openAccountAuth()}>{user ? <LogOut size={18} /> : <LogIn size={18} />}<span>{user ? "Sign out" : "Sign in or create account"}</span><ChevronRight size={17} /></button>
             </div>
           </div> : <div className="settings-detail">
@@ -1988,7 +1988,7 @@ function App() {
             </div>}
             {settingsDetail === "Personalization" && <div className="settings-card-neutral">
               <div className="settings-neutral-row"><div><strong>Improve responses</strong><span>Remember corrections and preferences for this account</span></div><button className={`switch ${preferences.learning ? "toggle-active" : ""}`} aria-label="Toggle response personalization" aria-pressed={preferences.learning} onClick={() => void updatePreferences({ learning: !preferences.learning })}><span className={preferences.learning ? "on" : ""} /></button></div>
-              <div className="settings-neutral-row"><div><strong>Use past conversations</strong><span>Allow KOPLI AI to recall relevant chats and preferences naturally</span></div><button className={`switch ${preferences.crossChat ? "toggle-active" : ""}`} aria-label="Toggle cross-chat memory" aria-pressed={preferences.crossChat} onClick={() => void updatePreferences({ crossChat: !preferences.crossChat })}><span className={preferences.crossChat ? "on" : ""} /></button></div>
+              <div className="settings-neutral-row"><div><strong>Use past conversations</strong><span>Allow FRIDAY AI to recall relevant chats and preferences naturally</span></div><button className={`switch ${preferences.crossChat ? "toggle-active" : ""}`} aria-label="Toggle cross-chat memory" aria-pressed={preferences.crossChat} onClick={() => void updatePreferences({ crossChat: !preferences.crossChat })}><span className={preferences.crossChat ? "on" : ""} /></button></div>
               <div className="settings-neutral-row"><div><strong>Voice and reply language</strong><span>Choose the language used to recognize your speech and guide replies</span></div><select className="chat-search" aria-label="Voice and reply language" value={preferences.language === "en" ? "en-IN" : preferences.language || "ta-IN"} onChange={event => void updatePreferences({ language: event.target.value })}><option value="ta-IN">Tamil</option><option value="tanglish">Tanglish</option><option value="en-IN">English (India)</option><option value="en-US">English (US)</option><option value="hi-IN">Hindi</option><option value="ml-IN">Malayalam</option><option value="te-IN">Telugu</option><option value="kn-IN">Kannada</option></select></div>
             </div>}
             {settingsDetail === "Data & memory" && <div className="settings-card-neutral">
@@ -1999,7 +1999,7 @@ function App() {
               <div className="settings-neutral-row"><div><strong>{user?.email || "Guest session"}</strong><span>{user ? "Your account is signed in" : "Sign in to sync your history"}</span></div><button className="settings-action" onClick={() => user ? void signOut() : openAccountAuth()}>{user ? "Sign out" : "Sign in"}</button></div>
               <div className="settings-neutral-row"><div><strong>Account storage</strong><span>{connectionStatus === "connected" ? "Connected" : connectionStatus === "checking" ? "Checking connection…" : connectionStatus === "offline" ? "Server unavailable" : "Database unavailable"}</span></div><button className="settings-action" onClick={() => void checkServerConnection()}>Retry</button></div>
             </div>}
-            {settingsDetail === "About KOPLI AI" && <div className="settings-card-neutral about-brand"><span className="brand-mark"><img src="/logo.png" alt="KOPLI AI" /></span><div><strong>KOPLI AI</strong><span>Your personal AI workspace</span></div></div>}
+            {settingsDetail === "About FRIDAY AI" && <div className="settings-card-neutral about-brand"><span className="brand-mark"><img src="/assets/friday-logo.svg" alt="FRIDAY AI" /></span><div><strong>FRIDAY AI</strong><span>Your personal AI workspace</span></div></div>}
           </div>}
           <div className="settings-search-wrap"><Search size={17} /><input value={settingsSearch} onChange={event => setSettingsSearch(event.target.value)} placeholder="Search settings" aria-label="Search settings" />
             {settingsSearch && <div className="settings-search-results" role="listbox">{settingsLinks.map(item => <button key={item} onClick={() => { setSettingsDetail(item); setSettingsSearch(""); }}>{item}</button>)}{!settingsLinks.length && <span>No matching settings.</span>}</div>}
@@ -2015,7 +2015,7 @@ function App() {
           <button className="dialog-close" aria-label="Close sign in" onClick={closeAuthDialog}><X size={19} /></button>
           <div className="auth-brand">KOPLI <span>AI</span></div>
           <h1 id="auth-title">{authStage === "forgot" ? "Reset your password" : authStage === "reset" ? "Create new password" : registering ? "Create your account" : "Welcome back"}</h1>
-          <p>{authStage === "forgot" ? "Enter your account email. The secure recovery link opens the new-password form directly." : authStage === "reset" ? "Choose a new password for your account." : registering ? "Create an account to sync conversations and files. Verify your email address before signing in." : "Sign in to your KOPLI AI account, or continue as a guest."}</p>
+          <p>{authStage === "forgot" ? "Enter your account email. The secure recovery link opens the new-password form directly." : authStage === "reset" ? "Choose a new password for your account." : registering ? "Create an account to sync conversations and files. Verify your email address before signing in." : "Sign in to your FRIDAY AI account, or continue as a guest."}</p>
           {authStage === "account" && <form onSubmit={event => void submitAuth(event)}>
             {registering && <label>Name<input autoComplete="name" value={authName} onChange={event => setAuthName(event.target.value)} required maxLength={100} /></label>}
             <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
@@ -2044,7 +2044,7 @@ function App() {
           </form>}
           {authStage === "account" && <div className="auth-links">
             {!registering && <button className="auth-mode-toggle" type="button" onClick={() => { setAuthStage("forgot"); setAuthError(""); setAuthMessage(""); setAuthPassword(""); setAuthPasswordConfirmation(""); setShowAuthPassword(false); }}>Forgot password?</button>}
-            <button className="auth-mode-toggle" type="button" onClick={() => { setRegistering(value => !value); setAuthError(""); setAuthMessage(""); setAuthPassword(""); setAuthPasswordConfirmation(""); }}>{registering ? "Already have an account? Sign in" : "New to KOPLI AI? Create an account"}</button>
+            <button className="auth-mode-toggle" type="button" onClick={() => { setRegistering(value => !value); setAuthError(""); setAuthMessage(""); setAuthPassword(""); setAuthPasswordConfirmation(""); }}>{registering ? "Already have an account? Sign in" : "New to FRIDAY AI? Create an account"}</button>
             {!registering && <button className="auth-mode-toggle guest-continue" type="button" onClick={closeAuthDialog}>Continue without login</button>}
           </div>}
         </section>
@@ -2097,5 +2097,5 @@ function App() {
 }
 
 const rootElement = document.getElementById("root");
-if (!rootElement) throw new Error("KOPLI AI root element was not found.");
+if (!rootElement) throw new Error("FRIDAY AI root element was not found.");
 createRoot(rootElement).render(<App />);

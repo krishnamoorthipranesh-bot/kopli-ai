@@ -1,6 +1,6 @@
-# KOPLI AI
+# FRIDAY AI
 
-KOPLI AI is a responsive AI assistant created and owned by Pranesh KK.
+FRIDAY AI is a responsive AI assistant created and owned by Pranesh KK.
 
 ## Production architecture
 
