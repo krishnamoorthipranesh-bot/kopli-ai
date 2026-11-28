@@ -874,12 +874,13 @@ app.post("/api/auth/register", authRateLimit, async (req, res) => {
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(409).json({ error: "An account with this email already exists." });
     const passwordHash = await bcrypt.hash(password, 12);
-    // New accounts must prove control of their email address before they can sign in.
-    // Owner privileges are granted only after the configured owner email is verified.
+    // Email verification is optional for sign-in. Keep unverified accounts as regular users;
+    // never grant owner privileges based only on an unverified email address.
     const user = await prisma.user.create({
       data: { email, name, passwordHash, role: "user", emailVerified: false }
     });
-    res.status(201).json({ message: "Account created. Verify your email address before signing in." });
+    await createSession(user.id, req, res);
+    res.status(201).json({ user: { email: user.email, name: user.name, role: "user" } });
   } catch (error) {
     console.error("Account registration failed:", error);
     if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
@@ -898,11 +899,8 @@ app.post("/api/auth/login", authRateLimit, async (req, res) => {
     if (!user?.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
       return res.status(401).json({ error: "Invalid email or password." });
     }
-    if (!user.emailVerified) {
-      return res.status(403).json({ error: "Please verify your email address before signing in. Use the resend verification option if you need a new link." });
-    }
-    // Never promote an account during login. Owner privileges are assigned only
-    // by the one-time email-verification flow or an authenticated administrator.
+    // Email verification is not required for sign-in. Unverified accounts retain
+    // their existing role; verification alone never grants additional privileges.
     const role: "user" | "owner" = user.role === "owner" ? "owner" : "user";
     await createSession(user.id, req, res);
     res.json({ user: { email: user.email, name: user.name, role } });
@@ -969,6 +967,32 @@ app.get("/api/auth/me", async (req, res) => {
   const user = await currentUser(req, res);
   if (!user) return res.json({ authenticated: false });
   res.json({ authenticated: true, user: { email: user.email, name: user.name, role: user.role } });
+});
+
+app.post("/api/auth/change-password", authRateLimit, async (req, res) => {
+  const currentPassword = String(req.body?.currentPassword || "");
+  const newPassword = String(req.body?.newPassword || "");
+  const confirmPassword = String(req.body?.confirmPassword || "");
+  if (!currentPassword) return res.status(400).json({ error: "Enter your current password." });
+  if (newPassword.length < 12) return res.status(400).json({ error: "New password must contain at least 12 characters." });
+  if (newPassword !== confirmPassword) return res.status(400).json({ error: "New password and confirmation do not match." });
+  if (currentPassword === newPassword) return res.status(400).json({ error: "Choose a password different from your current password." });
+  if (!prisma || !databaseReady) return res.status(503).json({ error: databaseUnavailableMessage("Password change") });
+  const user = await currentUser(req);
+  if (!user) return res.status(401).json({ error: "Sign in before changing your password." });
+  if (!user.passwordHash || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
+    return res.status(401).json({ error: "Your current password is incorrect." });
+  }
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+  const currentSessionToken = req.cookies?.kopli_session;
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: user.id }, data: { passwordHash } }),
+    prisma.authSession.deleteMany({
+      where: { userId: user.id, ...(currentSessionToken ? { tokenHash: { not: hashToken(currentSessionToken) } } : {}) }
+    }),
+    prisma.passwordResetToken.deleteMany({ where: { userId: user.id } })
+  ]);
+  res.json({ message: "Your password has been changed successfully." });
 });
 
 app.post("/api/auth/forgot-password", authRateLimit, async (req, res) => {
