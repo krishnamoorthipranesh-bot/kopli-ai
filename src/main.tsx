@@ -404,7 +404,6 @@ function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authMessage, setAuthMessage] = useState("");
-  const [pendingVerification, setPendingVerification] = useState(false);
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -600,8 +599,7 @@ function App() {
     setAuthBusy(true);
     request<{ message: string }>("/api/auth/verify-email", jsonRequest("POST", { token }))
       .then(result => {
-        setPendingVerification(false);
-        setAuthMessage(result.message || "Email verified. You can now sign in.");
+          setAuthMessage(result.message || "Email verified. You can now sign in.");
         window.history.replaceState({}, "", window.location.pathname);
       })
       .catch(error => setAuthError(errorText(error)))
@@ -1269,20 +1267,6 @@ function App() {
     setAuthPassword("");
     setAuthPasswordConfirmation("");
     setShowAuthPassword(false);
-  }
-
-  async function resendVerificationEmail() {
-    setAuthBusy(true);
-    setAuthError("");
-    setAuthMessage("");
-    try {
-      const result = await request<{ message: string }>("/api/auth/resend-verification", jsonRequest("POST", { email: authEmail }));
-      setAuthMessage(result.message || "If the account needs verification, a link has been sent.");
-    } catch (error) {
-      setAuthError(errorText(error));
-    } finally {
-      setAuthBusy(false);
-    }
   }
 
   async function submitPasswordRecovery(event: FormEvent) {
