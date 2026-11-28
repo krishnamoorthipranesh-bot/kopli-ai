@@ -409,6 +409,12 @@ function App() {
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authPasswordConfirmation, setAuthPasswordConfirmation] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [passwordChangeBusy, setPasswordChangeBusy] = useState(false);
+  const [passwordChangeMessage, setPasswordChangeMessage] = useState("");
+  const [passwordChangeError, setPasswordChangeError] = useState("");
   const [showAuthPassword, setShowAuthPassword] = useState(false);
   const [resetToken, setResetToken] = useState("");
   const [connectionStatus, setConnectionStatus] = useState<"checking" | "connected" | "degraded" | "offline">("checking");
@@ -1310,6 +1316,34 @@ function App() {
     finally { setAuthBusy(false); }
   }
 
+  async function submitPasswordChange(event: FormEvent) {
+    event.preventDefault();
+    setPasswordChangeError("");
+    setPasswordChangeMessage("");
+    if (newPassword !== confirmNewPassword) {
+      setPasswordChangeError("New password and confirmation do not match.");
+      return;
+    }
+    if (newPassword.length < 12) {
+      setPasswordChangeError("New password must contain at least 12 characters.");
+      return;
+    }
+    setPasswordChangeBusy(true);
+    try {
+      const result = await request<{ message: string }>("/api/auth/change-password", jsonRequest("POST", {
+        currentPassword, newPassword, confirmPassword: confirmNewPassword
+      }));
+      setPasswordChangeMessage(result.message);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+    } catch (error) {
+      setPasswordChangeError(errorText(error));
+    } finally {
+      setPasswordChangeBusy(false);
+    }
+  }
+
   async function signOut() {
     if (!user || !window.confirm(`Log out of FRIDAY AI as ${user.email}?`)) return;
     let cookieCleared = false;
@@ -2011,6 +2045,15 @@ function App() {
             {settingsDetail === "Account" && <div className="settings-card-neutral">
               <div className="settings-neutral-row"><div><strong>{user?.email || "Guest session"}</strong><span>{user ? "Your account is signed in" : "Sign in to sync your history"}</span></div><button className="settings-action" onClick={() => user ? void signOut() : openAccountAuth()}>{user ? "Sign out" : "Sign in"}</button></div>
               <div className="settings-neutral-row"><div><strong>Account storage</strong><span>{connectionStatus === "connected" ? "Connected" : connectionStatus === "checking" ? "Checking connection…" : connectionStatus === "offline" ? "Server unavailable" : "Database unavailable"}</span></div><button className="settings-action" onClick={() => void checkServerConnection()}>Retry</button></div>
+              {user && <form className="account-password-form" onSubmit={event => void submitPasswordChange(event)}>
+                <h3>Change password</h3>
+                <label>Current password<input className="chat-search" type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} required /></label>
+                <label>New password<input className="chat-search" type="password" autoComplete="new-password" minLength={12} value={newPassword} onChange={event => setNewPassword(event.target.value)} required /></label>
+                <label>Confirm new password<input className="chat-search" type="password" autoComplete="new-password" minLength={12} value={confirmNewPassword} onChange={event => setConfirmNewPassword(event.target.value)} required /></label>
+                {passwordChangeError && <p className="auth-error" role="alert">{passwordChangeError}</p>}
+                {passwordChangeMessage && <p className="auth-success" role="status">{passwordChangeMessage}</p>}
+                <button className="settings-action" type="submit" disabled={passwordChangeBusy}>{passwordChangeBusy ? "Updating…" : "Update password"}</button>
+              </form>}
             </div>}
             {settingsDetail === "About FRIDAY AI" && <div className="settings-card-neutral about-brand"><span className="brand-mark"><img src="/assets/friday-logo.svg" alt="FRIDAY AI" /></span><div><strong>FRIDAY AI</strong><span>Your personal AI workspace</span></div></div>}
           </div>}
@@ -2028,7 +2071,7 @@ function App() {
           <button className="dialog-close" aria-label="Close sign in" onClick={closeAuthDialog}><X size={19} /></button>
           <div className="auth-brand">FRIDAY <span>AI</span></div>
           <h1 id="auth-title">{authStage === "forgot" ? "Reset your password" : authStage === "reset" ? "Create new password" : registering ? "Create your account" : "Welcome back"}</h1>
-          <p>{authStage === "forgot" ? "Enter your account email. We send a secure reset link, not an OTP code. Open the link to set and confirm your new password." : authStage === "reset" ? "Choose a new password and confirm it to update your account." : registering ? "Create an account to sync conversations and files. Verify your email address before signing in." : "Sign in to your FRIDAY AI account, or continue as a guest."}</p>
+          <p>{authStage === "forgot" ? "Enter your account email. We send a secure reset link, not an OTP code. Open the link to set and confirm your new password." : authStage === "reset" ? "Choose a new password and confirm it to update your account." : registering ? "Create an account to sync conversations and files. You can sign in immediately without email verification." : "Sign in to your FRIDAY AI account, or continue as a guest."}</p>
           {authStage === "account" && <form onSubmit={event => void submitAuth(event)}>
             {registering && <label>Name<input autoComplete="name" value={authName} onChange={event => setAuthName(event.target.value)} required maxLength={100} /></label>}
             <label>Email<input type="email" autoComplete="email" value={authEmail} onChange={event => setAuthEmail(event.target.value)} required /></label>
@@ -2036,7 +2079,6 @@ function App() {
             {registering && <label>Confirm password<input type={showAuthPassword ? "text" : "password"} autoComplete="new-password" value={authPasswordConfirmation} onChange={event => setAuthPasswordConfirmation(event.target.value)} required minLength={12} /></label>}
             {authError && <p className="auth-error" role="alert">{authError}</p>}
             {authMessage && <p className="auth-success" role="status">{authMessage}</p>}
-            {pendingVerification && <button className="auth-mode-toggle" type="button" onClick={() => void resendVerificationEmail()} disabled={authBusy}>Resend verification email</button>}
             <button className="auth-submit" type="submit" disabled={authBusy}>{authBusy ? "Please wait…" : registering ? "Create account" : "Sign in"}</button>
           </form>}
           {authStage === "forgot" && <form onSubmit={event => void submitPasswordRecovery(event)}>
