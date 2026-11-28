@@ -1385,7 +1385,15 @@ app.post("/api/chat", aiChatRateLimit, async (req, res) => {
     } catch (error: any) {
       if (!res.destroyed && !clientDisconnected) {
         console.error("Chat provider request failed.", error);
-        res.write(`data: ${JSON.stringify({ error: "The AI service could not complete this response. Please retry." })}\n\n`);
+        const providerStatus = Number(error?.status || error?.statusCode || 0);
+        const publicError = providerStatus === 401 || providerStatus === 403
+          ? "The AI provider rejected its API credentials. The FRIDAY AI administrator must update the Groq API key in Vercel."
+          : providerStatus === 429
+            ? "The AI provider is rate-limiting requests. Please wait a moment and try again."
+            : providerStatus >= 500
+              ? "The AI provider is temporarily unavailable. Please try again shortly."
+              : "The AI service could not complete this response. Please retry.";
+        res.write(`data: ${JSON.stringify({ error: publicError })}\n\n`);
       }
     }
   }
