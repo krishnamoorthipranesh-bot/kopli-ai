@@ -1651,7 +1651,7 @@ function App() {
         const result = await response.json().catch(() => ({})) as { fileName?: string; mimeType?: string; imageData?: string; error?: string };
         if (!response.ok || !result.imageData) throw new ApiError(result.error || `Image editing failed (${response.status}).`, response.status);
         const previewUrl = `data:${result.mimeType || "image/png"};base64,${result.imageData}`;
-        const fileName = result.fileName || "KOPLI_AI_Edited.png";
+        const fileName = result.fileName || "FRIDAY_AI_Edited.png";
         setToolResult({ fileName, mimeType: result.mimeType || "image/png", previewUrl });
         setImageHistory(previous => [{ prompt: `Edit: ${toolPrompt}`, previewUrl, fileName }, ...previous.filter(item => item.previewUrl !== previewUrl)].slice(0, 5));
       } else if (toolType === "docx") {
@@ -1678,7 +1678,7 @@ function App() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `${toolResult.title.replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "KOPLI_AI_Document"}.${format}`;
+      link.download = `${toolResult.title.replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "FRIDAY_AI_Document"}.${format}`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -1731,7 +1731,7 @@ function App() {
     <div ref={appRootRef} className={`app${dark ? " dark" : ""}${reduceEffects ? " reduce-effects" : ""}`}>
       {mobileViewport && sidebarOpen && <button className="sidebar-overlay" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar${sidebarOpen ? " open" : ""}`} aria-label="Main navigation">
-        <div className="brand"><span className="brand-mark"><img className="hen-image hen-small" src="/assets/friday-logo.svg" alt="" /></span><strong>KOPLI <b>AI</b></strong></div>
+        <div className="brand"><span className="brand-mark"><img className="hen-image hen-small" src="/assets/friday-logo.svg" alt="" /></span><strong>FRIDAY <b>AI</b></strong></div>
         <button className="sidebar-close" type="button" aria-label="Close dashboard navigation" title="Close dashboard" onClick={() => setSidebarOpen(false)}><X size={19} /></button>
         <button className="new-chat" aria-label="New chat" title="New chat" onClick={newChat}><Plus size={18} aria-hidden="true" /><span>New chat</span></button>
         <nav className="nav" aria-label="Workspace">
@@ -1923,7 +1923,7 @@ function App() {
                 try {
                   const response = await fetch(toolResult.previewUrl!);
                   const blob = await response.blob();
-                  const nextFile = new File([blob], toolResult.fileName || "KOPLI_AI_Edit.png", { type: toolResult.mimeType || "image/png" });
+                  const nextFile = new File([blob], toolResult.fileName || "FRIDAY_AI_Edit.png", { type: toolResult.mimeType || "image/png" });
                   setToolEditFile(nextFile);
                   setToolEditPreview(toolResult.previewUrl!);
                   setToolPrompt("");
@@ -2013,7 +2013,7 @@ function App() {
       {authOpen && <div className="dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeAuthDialog(); }}>
         <section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
           <button className="dialog-close" aria-label="Close sign in" onClick={closeAuthDialog}><X size={19} /></button>
-          <div className="auth-brand">KOPLI <span>AI</span></div>
+          <div className="auth-brand">FRIDAY <span>AI</span></div>
           <h1 id="auth-title">{authStage === "forgot" ? "Reset your password" : authStage === "reset" ? "Create new password" : registering ? "Create your account" : "Welcome back"}</h1>
           <p>{authStage === "forgot" ? "Enter your account email. The secure recovery link opens the new-password form directly." : authStage === "reset" ? "Choose a new password for your account." : registering ? "Create an account to sync conversations and files. Verify your email address before signing in." : "Sign in to your FRIDAY AI account, or continue as a guest."}</p>
           {authStage === "account" && <form onSubmit={event => void submitAuth(event)}>

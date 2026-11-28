@@ -1601,7 +1601,7 @@ app.post("/api/images/search", imageSearchRateLimit, async (req, res) => {
       format: "json"
     });
     const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params.toString()}`, {
-      headers: { "User-Agent": "KOPLI-AI/1.0 (relevant image search)" },
+      headers: { "User-Agent": "FRIDAY-AI/1.0 (relevant image search)" },
       signal: AbortSignal.timeout(20000)
     });
     if (!response.ok) throw new Error(`Wikimedia Commons returned HTTP ${response.status}.`);
@@ -1754,7 +1754,7 @@ app.post("/api/images/generate", imageGenerationRateLimit, async (req, res) => {
     prompt: finalPrompt,
     originalPrompt: prompt,
     mimeType,
-    fileName: `KOPLI_AI_${id.slice(0, 8)}.${actualFormat}`,
+    fileName: `FRIDAY_AI_${id.slice(0, 8)}.${actualFormat}`,
     ...(req.body?.includePreview === true ? { imageData: buffer.toString("base64") } : {})
   });
 });
@@ -1835,7 +1835,7 @@ app.post("/api/images/edit", imageGenerationRateLimit, imageEditUpload.single("i
       return res.status(502).json({ error: "Cloudflare did not return a valid PNG image." });
     }
     const id = crypto.randomUUID();
-    const fileName = `KOPLI_AI_EDIT_${id.slice(0, 8)}.png`;
+    const fileName = `FRIDAY_AI_EDIT_${id.slice(0, 8)}.png`;
     const localPath = path.join(generated, `${id}.png`);
     await fs.promises.writeFile(localPath, outputBytes);
     await saveUserFile({ id, userId: user.id, name: fileName, mimeType: "image/png", bytes: outputBytes, kind: "image", localPath });
@@ -2130,7 +2130,7 @@ async function generateFile(req: express.Request, res: express.Response) {
       const bytes = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" }) as Buffer;
       fs.writeFileSync(file, bytes);
       await saveUserFile({ id, userId: user.id, name: `${id}.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes, kind: "document", localPath: file });
-      return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Workbook.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", url: `/api/files/${id}.xlsx`, format: "XLSX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
+      return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "FRIDAY_AI"}_Workbook.xlsx`, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", url: `/api/files/${id}.xlsx`, format: "XLSX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
     if (format === "pdf") {
@@ -2153,7 +2153,7 @@ async function generateFile(req: express.Request, res: express.Response) {
       });
       const bytes = fs.readFileSync(file);
       await saveUserFile({ id, userId: user.id, name: `${id}.pdf`, mimeType: "application/pdf", bytes, kind: "document", localPath: file });
-      return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Report.pdf`, mimeType: "application/pdf", url: `/api/files/${id}.pdf`, format: "PDF", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
+      return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "FRIDAY_AI"}_Report.pdf`, mimeType: "application/pdf", url: `/api/files/${id}.pdf`, format: "PDF", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
     if (format === "pptx" || format === "ppt") {
@@ -2194,7 +2194,7 @@ async function generateFile(req: express.Request, res: express.Response) {
       if (!fs.existsSync(file) || fs.statSync(file).size < 1000) throw new Error("PowerPoint file generation produced an invalid file.");
       const bytes = fs.readFileSync(file);
       await saveUserFile({ id, userId: user.id, name: `${id}.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", bytes, kind: "document", localPath: file });
-      return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Presentation.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", url: `/api/files/${id}.pptx`, format: "PPTX", slideCount: slides.length, ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
+      return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "FRIDAY_AI"}_Presentation.pptx`, mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", url: `/api/files/${id}.pptx`, format: "PPTX", slideCount: slides.length, ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
     }
 
     const structured = await generateStructuredContent(prompt, topic, "docx") as any;
@@ -2219,7 +2219,7 @@ async function generateFile(req: express.Request, res: express.Response) {
     if (!fs.existsSync(file) || fs.statSync(file).size < 1000) throw new Error("Word file generation produced an invalid file.");
     const bytes = fs.readFileSync(file);
     await saveUserFile({ id, userId: user.id, name: `${id}.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes, kind: "document", localPath: file });
-    return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "KOPLI_AI"}_Document.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", url: `/api/files/${id}.docx`, format: "DOCX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
+    return res.json({ id, fileName: `${topic.replace(/[^a-z0-9]+/gi, "_").replace(/^_|_$/g, "") || "FRIDAY_AI"}_Document.docx`, mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", url: `/api/files/${id}.docx`, format: "DOCX", ...(req.body?.includeContent === true ? { content: bytes.toString("base64") } : {}) });
   } catch (error: any) {
     res.status(error?.statusCode || 500).json({ error: error?.message || "Document generation failed." });
   }
@@ -2250,7 +2250,7 @@ app.post("/api/documents/export", documentRateLimit, async (req, res) => {
   if (content.length > 50000) return res.status(400).json({ error: "Document content exceeds 50,000 characters." });
   if (!["docx", "pdf", "txt"].includes(format)) return res.status(400).json({ error: "Choose DOCX, PDF, or TXT format." });
   try {
-    const safeTitle = title.replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "KOPLI_AI_Document";
+    const safeTitle = title.replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "FRIDAY_AI_Document";
     const mimeType = format === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : format === "pdf" ? "application/pdf" : "text/plain; charset=utf-8";
     const bytes = format === "docx" ? await createDocxBuffer(title, content) : format === "pdf" ? await createPdfBuffer(title, content) : Buffer.from(content, "utf8");
     res.setHeader("Content-Type", mimeType);

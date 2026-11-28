@@ -271,7 +271,7 @@ button { cursor: pointer; }
   position: absolute;
   z-index: 3;
   pointer-events: none;
-  background-image: url("/logo.png");
+  background-image: url("/assets/friday-logo.svg");
   background-repeat: no-repeat;
   background-size: 220px 220px;
   opacity: 0;
